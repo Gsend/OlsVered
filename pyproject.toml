@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "olsvered"
+version = "0.1.0"
+description = "Closed-form OLS without inversion or normalization (Rust backend)"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.21"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+features = ["extension-module"]
+module-name = "olsvered"
+python-source = "python"

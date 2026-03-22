@@ -1,0 +1,27 @@
+[package]
+name = "olsvered"
+version = "0.1.0"
+edition = "2021"
+description = "Closed-form OLS without inversion or normalization"
+license = "MIT"
+
+[lib]
+name = "olsvered"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nalgebra = { version = "0.33", features = ["std"] }
+thiserror = "1.0"
+pyo3      = { version = "0.21", features = ["extension-module"], optional = true }
+numpy     = { version = "0.21", optional = true }
+
+[build-dependencies]
+cbindgen = "0.26"
+
+[features]
+default = []
+python  = ["pyo3", "numpy"]
+extension-module = ["python"]
+
+[dev-dependencies]
+approx = "0.5"

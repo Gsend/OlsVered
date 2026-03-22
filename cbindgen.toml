@@ -1,0 +1,4 @@
+language = "C"
+include_guard = "OLSVERED_H"
+documentation = true
+include_modules = ["ffi"]
