@@ -441,3 +441,114 @@ pub fn lu_damped_inverse_f32(gram: &[f32], n: usize, damping: f32) -> Vec<f32> {
     }
     out
 }
+
+/// Compute the self-adjoint eigendecomposition of a symmetric f32 Gram matrix and
+/// return the eigenvector matrix **Q** plus damped inverse eigenvalues **1/(λ+δ)**.
+///
+/// # Arguments
+/// * `gram`    — Row-major `n×n` f32 slice (symmetric, PSD).
+/// * `n`       — Matrix dimension.
+/// * `damping` — Scalar δ added in eigenvalue space: returns `1/(λᵢ + δ)`.
+///               Applied after decomposition so Q can be reused across damping
+///               values without re-decomposing.
+///
+/// # Returns
+/// `(q_flat, inv_lambda)` where:
+/// * `q_flat` is row-major `n×n` f32 (column j of Q = eigenvector j, sorted by
+///   ascending eigenvalue).
+/// * `inv_lambda` is length-n f32 with values `1 / max(λᵢ + δ, 1e-8)` — clamped
+///   to prevent division by zero near-singular matrices.
+///
+/// The original matrix is reconstructed as `gram ≈ Q @ diag(λ) @ Qᵀ`.
+pub fn eigh_f32(gram: &[f32], n: usize, damping: f32) -> (Vec<f32>, Vec<f32>) {
+    use faer::linalg::solvers::SelfAdjointEigendecomposition;
+
+    let fa = faer::Mat::<f32>::from_fn(n, n, |i, j| gram[i * n + j]);
+    // faer's symmetric EVD: A = U S Uᵀ, eigenvalues sorted ascending
+    let eig = SelfAdjointEigendecomposition::<f32>::new(fa.as_ref(), faer::Side::Lower);
+
+    // Inverse damped eigenvalues: 1 / max(λᵢ + δ, 1e-8)
+    let inv_lambda: Vec<f32> = (0..n)
+        .map(|i| {
+            let lam = eig.s().column_vector().read(i);
+            1.0_f32 / (lam + damping).max(1e-8_f32)
+        })
+        .collect();
+
+    // Eigenvectors in row-major layout: q_flat[i*n + j] = Q[i, j]
+    let q = eig.u();
+    let q_flat: Vec<f32> = (0..n)
+        .flat_map(|i| (0..n).map(move |j| q.read(i, j)))
+        .collect();
+
+    (q_flat, inv_lambda)
+}
+
+/// Apply the K-FAC eigen-basis preconditioner to a weight gradient.
+///
+/// Computes: `ΔW = Q_G · diag(d_G) · (Q_Gᵀ · grad · Q_A) · diag(d_A) · Q_Aᵀ`
+///
+/// where `d_G = 1/(λ_G + δ)` and `d_A = 1/(λ_A + δ)` are the damped inverse
+/// eigenvalues returned by [`eigh_f32`].
+///
+/// # Arguments
+/// * `q_g`       — Row-major `d_out × d_out` eigenvector matrix of G.
+/// * `inv_lam_g` — Length-`d_out` damped inverse eigenvalues of G.
+/// * `d_out`     — Output dimension.
+/// * `grad`      — Row-major `d_out × d_in` weight gradient.
+/// * `q_a`       — Row-major `d_in × d_in` eigenvector matrix of A.
+/// * `inv_lam_a` — Length-`d_in` damped inverse eigenvalues of A.
+/// * `d_in`      — Input dimension.
+///
+/// # Returns
+/// Row-major `d_out × d_in` f32 preconditioned gradient.
+pub fn apply_kfac_eigen_f32(
+    q_g: &[f32], inv_lam_g: &[f32], d_out: usize,
+    grad: &[f32],
+    q_a: &[f32], inv_lam_a: &[f32], d_in: usize,
+) -> Vec<f32> {
+    use faer::linalg::matmul::matmul;
+
+    // Load from row-major slices into faer column-major matrices
+    let qg = faer::Mat::<f32>::from_fn(d_out, d_out, |i, j| q_g[i * d_out + j]);
+    let qa = faer::Mat::<f32>::from_fn(d_in,  d_in,  |i, j| q_a[i * d_in  + j]);
+    let gr = faer::Mat::<f32>::from_fn(d_out, d_in,  |i, j| grad[i * d_in + j]);
+
+    // Step 1: tmp1 = Q_Gᵀ @ grad   (d_out × d_in)
+    let mut tmp1 = faer::Mat::<f32>::zeros(d_out, d_in);
+    matmul(tmp1.as_mut(), qg.transpose(), gr.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 2: tmp2 = tmp1 @ Q_A   (d_out × d_in)
+    let mut tmp2 = faer::Mat::<f32>::zeros(d_out, d_in);
+    matmul(tmp2.as_mut(), tmp1.as_ref(), qa.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 3: scale each (i,j) by inv_lam_g[i] * inv_lam_a[j]
+    for i in 0..d_out {
+        let sg = inv_lam_g[i];
+        for j in 0..d_in {
+            let v = tmp2.read(i, j);
+            tmp2.write(i, j, v * sg * inv_lam_a[j]);
+        }
+    }
+
+    // Step 4: tmp3 = Q_G @ tmp2   (d_out × d_in)
+    let mut tmp3 = faer::Mat::<f32>::zeros(d_out, d_in);
+    matmul(tmp3.as_mut(), qg.as_ref(), tmp2.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 5: result = tmp3 @ Q_Aᵀ   (d_out × d_in)
+    let mut result = faer::Mat::<f32>::zeros(d_out, d_in);
+    matmul(result.as_mut(), tmp3.as_ref(), qa.transpose(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Extract row-major
+    let mut out = vec![0.0_f32; d_out * d_in];
+    for i in 0..d_out {
+        for j in 0..d_in {
+            out[i * d_in + j] = result.read(i, j);
+        }
+    }
+    out
+}

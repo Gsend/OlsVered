@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from optimizer.backend import lu_damped_inverse_f32
+from optimizer.backend import eigh_f32, apply_kfac_eigen_f32
 from optimizer.hooks import KFACHooks
 
 
@@ -74,10 +74,12 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.hooks = KFACHooks(model)
         self.hooks.enable()
 
-        # Cached factors and inverses (stored as torch tensors to avoid
-        # repeated numpy→torch conversion in the hot step() path)
+        # Cached factors and eigen decompositions.
+        # _inverses stores (Q_A, inv_λ_A, Q_G, inv_λ_G) as torch f32 tensors.
+        # The apply step uses these directly — no extra copies or dtype casts.
         self._factors: Dict[nn.Module, Tuple[torch.Tensor, torch.Tensor]] = {}
-        self._inverses: Dict[nn.Module, Tuple[torch.Tensor, torch.Tensor]] = {}
+        self._inverses: Dict[nn.Module, Tuple[
+            torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
         self._momentum_buffers: Dict[nn.Module, torch.Tensor] = {}
 
         # Step counter
@@ -99,31 +101,38 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.timing["factor_compute"].append(time.perf_counter() - t0)
 
     def _update_inverses(self):
-        """Recompute cached inverses A⁻¹, G⁻¹ using olsvered f32 fast path.
+        """Recompute cached eigen decompositions A = QΛQᵀ, G = QΛQᵀ.
 
-        lu_damped_inverse_f32 takes the f32 numpy array directly, applies
-        damping inside Rust, and returns f32 — zero dtype cast, 2 copies total.
-        We then wrap the result in a torch tensor once and cache it, so the
-        hot step() path never calls from_numpy() or .to() again.
+        Uses faer's SIMD-accelerated self-adjoint EVD (f32 throughout).
+        Damping is applied in eigenvalue space: caches 1/(λᵢ + δ) instead of
+        materialising the full inverse matrix.  This lets us:
+
+          1. Avoid forming the dense n×n inverse (saves O(n³) flops vs LU inverse).
+          2. Clamp near-zero eigenvalues for better stability near singularity.
+          3. Change the damping coefficient without re-factorising Q.
+
+        The cached (Q_A, inv_λ_A, Q_G, inv_λ_G) tuples are stored as f32 torch
+        tensors so the hot apply path never touches numpy after this point.
         """
         t0 = time.perf_counter()
         for module, (A, G) in self._factors.items():
             device = module.weight.device
-            dtype = module.weight.dtype
+            dtype  = module.weight.dtype
 
-            # f32 contiguous numpy — no dtype cast needed
             A_np = np.ascontiguousarray(A.cpu().numpy(), dtype=np.float32)
             G_np = np.ascontiguousarray(G.cpu().numpy(), dtype=np.float32)
 
-            # Invert with damping inside Rust (f32 throughout)
-            A_inv_np = lu_damped_inverse_f32(A_np, self.damping)
-            G_inv_np = lu_damped_inverse_f32(G_np, self.damping)
+            # faer symmetric EVD — returns (Q, inv_λ) both f32
+            Q_A, inv_lam_A = eigh_f32(A_np, self.damping)
+            Q_G, inv_lam_G = eigh_f32(G_np, self.damping)
 
-            # Wrap once as torch tensor; move to device/dtype
-            A_inv_t = torch.from_numpy(A_inv_np).to(device=device, dtype=dtype)
-            G_inv_t = torch.from_numpy(G_inv_np).to(device=device, dtype=dtype)
-
-            self._inverses[module] = (A_inv_t, G_inv_t)
+            # Cache as torch tensors; move to target device/dtype once
+            self._inverses[module] = (
+                torch.from_numpy(Q_A).to(device=device, dtype=dtype),
+                torch.from_numpy(inv_lam_A).to(device=device, dtype=dtype),
+                torch.from_numpy(Q_G).to(device=device, dtype=dtype),
+                torch.from_numpy(inv_lam_G).to(device=device, dtype=dtype),
+            )
 
         self.timing["inversion"].append(time.perf_counter() - t0)
 
@@ -173,8 +182,8 @@ class OlsveredKFAC(torch.optim.Optimizer):
                     p.data.add_(grad, alpha=-lr)
                 continue
 
-            # Inverses are already torch tensors (cached by _update_inverses)
-            A_inv_t, G_inv_t = self._inverses[module]
+            # Eigen factors cached by _update_inverses
+            Q_A, inv_lam_A, Q_G, inv_lam_G = self._inverses[module]
 
             # Get hyperparams for this layer
             for group in self.param_groups:
@@ -184,14 +193,16 @@ class OlsveredKFAC(torch.optim.Optimizer):
                     mom = group["momentum"]
                     break
 
-            # --- Weight update: ΔW = G⁻¹ · ∇L_W · A⁻¹ ---
+            # --- Weight update: ΔW = Q_G d_G Q_Gᵀ ∇W Q_A d_A Q_Aᵀ ---
             if module.weight.grad is not None:
                 grad_w = module.weight.grad  # (d_out, d_in)
                 if wd > 0:
                     grad_w = grad_w + wd * module.weight.data
 
-                # Natural gradient: G⁻¹ @ grad @ A⁻¹
-                nat_grad = G_inv_t @ grad_w @ A_inv_t  # (d_out, d_in)
+                # Apply in eigen basis — 4 matmuls + element-wise scale
+                tmp = Q_G.T @ grad_w @ Q_A                               # rotate in
+                tmp = tmp * (inv_lam_G.unsqueeze(1) * inv_lam_A.unsqueeze(0))  # scale
+                nat_grad = Q_G @ tmp @ Q_A.T                             # rotate out
 
                 # Momentum
                 if mom > 0:
@@ -203,12 +214,14 @@ class OlsveredKFAC(torch.optim.Optimizer):
 
                 module.weight.data.add_(nat_grad, alpha=-lr)
 
-            # --- Bias update: Δb = G⁻¹ · ∇L_b ---
+            # --- Bias update: Δb = Q_G d_G Q_Gᵀ ∇b ---
             if module.bias is not None and module.bias.grad is not None:
                 grad_b = module.bias.grad  # (d_out,)
                 if wd > 0:
                     grad_b = grad_b + wd * module.bias.data
-                nat_grad_b = G_inv_t @ grad_b
+                tmp_b = Q_G.T @ grad_b
+                tmp_b = tmp_b * inv_lam_G
+                nat_grad_b = Q_G @ tmp_b
                 module.bias.data.add_(nat_grad_b, alpha=-lr)
 
         self.timing["precondition"].append(time.perf_counter() - t_precond)

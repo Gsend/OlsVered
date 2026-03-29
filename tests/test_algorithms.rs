@@ -222,3 +222,119 @@ fn test_weighted_generalized_inverse_output_shape() {
     assert_eq!(g.nrows(), x.ncols()); // p rows
     assert_eq!(g.ncols(), n); // n cols
 }
+
+// ---------------------------------------------------------------------------
+// Algorithm 4 — lu_solve_gram
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_lu_solve_gram_identity() {
+    // gram = I → solution = rhs
+    let p = 4;
+    let k = 2;
+    let gram = DMatrix::identity(p, p);
+    let rhs = DMatrix::from_row_slice(p, k, &[
+        1.0, 2.0,
+        3.0, 4.0,
+        5.0, 6.0,
+        7.0, 8.0,
+    ]);
+    let result = lu_solve_gram(&gram, &rhs).expect("lu_solve_gram should succeed");
+    assert_eq!(result.nrows(), p);
+    assert_eq!(result.ncols(), k);
+    for i in 0..p {
+        for j in 0..k {
+            assert_abs_diff_eq!(result[(i, j)], rhs[(i, j)], epsilon = 1e-12);
+        }
+    }
+}
+
+#[test]
+fn test_lu_solve_gram_matches_solve_ols() {
+    // lu_solve_gram(XᵀX, Xᵀy) should match solve_ols(X, y)
+    let (x, y) = make_4x2_system();
+    let xtx = x.transpose() * &x;
+    let xty = x.transpose() * &y;
+    // Convert xty vector to single-column matrix for lu_solve_gram
+    let xty_mat = DMatrix::from_column_slice(xty.len(), 1, xty.as_slice());
+    let result = lu_solve_gram(&xtx, &xty_mat).expect("lu_solve_gram should succeed");
+    let beta_ols = solve_ols(&x, &y).expect("solve_ols should succeed");
+    for i in 0..beta_ols.len() {
+        assert_abs_diff_eq!(result[(i, 0)], beta_ols[i], epsilon = 1e-10);
+    }
+}
+
+#[test]
+fn test_lu_solve_gram_vec_matches_solve_ols() {
+    let (x, y) = make_4x2_system();
+    let xtx = x.transpose() * &x;
+    let xty = x.transpose() * &y;
+    let result = lu_solve_gram_vec(&xtx, &xty).expect("lu_solve_gram_vec should succeed");
+    let beta_ols = solve_ols(&x, &y).expect("solve_ols should succeed");
+    for i in 0..beta_ols.len() {
+        assert_abs_diff_eq!(result[i], beta_ols[i], epsilon = 1e-10);
+    }
+}
+
+#[test]
+fn test_lu_solve_gram_dimension_mismatch() {
+    let gram = DMatrix::identity(3, 3);
+    let rhs = DMatrix::from_row_slice(4, 1, &[1.0, 2.0, 3.0, 4.0]);
+    let result = lu_solve_gram(&gram, &rhs);
+    assert!(
+        matches!(result, Err(OlsveredError::DimensionMismatch { .. })),
+        "expected DimensionMismatch"
+    );
+}
+
+#[test]
+fn test_lu_solve_gram_non_square_error() {
+    let gram = DMatrix::from_row_slice(3, 2, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = DMatrix::from_row_slice(3, 1, &[1.0, 2.0, 3.0]);
+    let result = lu_solve_gram(&gram, &rhs);
+    assert!(
+        matches!(result, Err(OlsveredError::DimensionMismatch { .. })),
+        "expected DimensionMismatch for non-square gram"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// lu_inverse_gram
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_lu_inverse_gram_identity() {
+    let p = 4;
+    let gram = DMatrix::identity(p, p);
+    let inv = lu_inverse_gram(&gram).expect("lu_inverse_gram should succeed");
+    let identity = DMatrix::identity(p, p);
+    for i in 0..p {
+        for j in 0..p {
+            assert_abs_diff_eq!(inv[(i, j)], identity[(i, j)], epsilon = 1e-12);
+        }
+    }
+}
+
+#[test]
+fn test_lu_inverse_gram_roundtrip() {
+    // gram @ inv(gram) ≈ I
+    let (x, _) = make_5x3_system();
+    let gram = x.transpose() * &x; // shape (3, 3)
+    let inv = lu_inverse_gram(&gram).expect("lu_inverse_gram should succeed");
+    let product = &gram * &inv;
+    let identity = DMatrix::identity(gram.nrows(), gram.ncols());
+    for i in 0..identity.nrows() {
+        for j in 0..identity.ncols() {
+            assert_abs_diff_eq!(product[(i, j)], identity[(i, j)], epsilon = 1e-8);
+        }
+    }
+}
+
+#[test]
+fn test_lu_inverse_gram_output_shape() {
+    let p = 5;
+    let gram = DMatrix::identity(p, p);
+    let inv = lu_inverse_gram(&gram).unwrap();
+    assert_eq!(inv.nrows(), p);
+    assert_eq!(inv.ncols(), p);
+}

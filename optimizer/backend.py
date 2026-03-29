@@ -130,6 +130,71 @@ def lu_damped_inverse_f32(gram: np.ndarray, damping: float) -> np.ndarray:
     return _np_lu_inverse_gram(g64).astype(gram.dtype)
 
 
+def eigh_f32(gram: np.ndarray, damping: float):
+    """Symmetric eigendecomposition of a Gram matrix — fast K-FAC path.
+
+    Uses faer's SIMD-accelerated EVD on f32.  Returns the eigenvector matrix
+    **Q** and damped inverse eigenvalues **1/(λᵢ + δ)**, both as float32.
+
+    Damping is applied in eigenvalue space so Q can be cached across multiple
+    damping values without re-decomposing.
+
+    Parameters
+    ----------
+    gram : np.ndarray, shape (n, n), float32 or float64
+        Symmetric positive-(semi)definite Gram matrix.
+    damping : float
+        Scalar δ — returns ``1 / max(λᵢ + δ, 1e-8)``.
+
+    Returns
+    -------
+    q : np.ndarray, shape (n, n), float32 — eigenvector matrix (columns = eigenvectors)
+    inv_lambda : np.ndarray, shape (n,), float32 — damped inverse eigenvalues
+    """
+    if _HAS_RUST:
+        g32 = np.ascontiguousarray(gram, dtype=np.float32)
+        return _rust_backend.eigh_f32(g32, float(damping))
+    # numpy fallback
+    g64 = gram.astype(np.float64)
+    eigenvalues, q = np.linalg.eigh(g64)
+    inv_lam = (1.0 / np.maximum(eigenvalues + damping, 1e-8)).astype(np.float32)
+    return q.astype(np.float32), inv_lam
+
+
+def apply_kfac_eigen_f32(
+    q_g: np.ndarray, inv_lam_g: np.ndarray,
+    grad: np.ndarray,
+    q_a: np.ndarray, inv_lam_a: np.ndarray,
+) -> np.ndarray:
+    """Apply K-FAC eigen-basis preconditioner: ΔW = Q_G d_G Q_Gᵀ grad Q_A d_A Q_Aᵀ.
+
+    All 4 matrix products and element-wise scaling are fused in a single Rust
+    call, eliminating Python dispatch overhead for the per-step hot path.
+
+    Parameters
+    ----------
+    q_g, inv_lam_g : eigenvectors (d_out×d_out) and damped inverse eigenvalues (d_out,) of G
+    grad           : weight gradient (d_out × d_in)
+    q_a, inv_lam_a : eigenvectors (d_in×d_in) and damped inverse eigenvalues (d_in,) of A
+
+    Returns
+    -------
+    np.ndarray, shape (d_out, d_in), float32 — preconditioned gradient
+    """
+    if _HAS_RUST:
+        return _rust_backend.apply_kfac_eigen_f32(
+            np.ascontiguousarray(q_g,      dtype=np.float32),
+            np.ascontiguousarray(inv_lam_g, dtype=np.float32),
+            np.ascontiguousarray(grad,     dtype=np.float32),
+            np.ascontiguousarray(q_a,      dtype=np.float32),
+            np.ascontiguousarray(inv_lam_a, dtype=np.float32),
+        )
+    # numpy fallback: explicit 4-matmul apply
+    tmp = q_g.T @ grad.astype(np.float32) @ q_a
+    tmp = tmp * np.outer(inv_lam_g, inv_lam_a)
+    return (q_g @ tmp @ q_a.T)
+
+
 def get_backend_name() -> str:
     """Return the name of the active backend."""
     return "olsvered (Rust)" if _HAS_RUST else "numpy/scipy (fallback)"

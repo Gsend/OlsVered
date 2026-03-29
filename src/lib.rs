@@ -302,6 +302,80 @@ mod python_bindings {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// Compute the symmetric eigendecomposition of a Gram matrix (fast path for K-FAC).
+    ///
+    /// Uses faer's SIMD-accelerated self-adjoint EVD on f32 data.
+    /// Damping is applied in eigenvalue space so Q can be reused when only
+    /// changing the damping coefficient.
+    ///
+    /// Args:
+    ///     gram   : numpy float32 array of shape (n, n), symmetric PSD
+    ///     damping: scalar δ — returns 1 / max(λᵢ + δ, 1e-8)
+    ///
+    /// Returns:
+    ///     (q, inv_lambda) where q is (n, n) float32 and inv_lambda is (n,) float32
+    #[pyfunction]
+    pub fn eigh_f32<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f32>,
+        damping: f64,
+    ) -> PyResult<(&'py PyArray2<f32>, &'py PyArray1<f32>)> {
+        let shape = gram.shape();
+        let n = shape[0];
+        if shape[1] != n {
+            return Err(pyo3::exceptions::PyValueError::new_err("gram must be square"));
+        }
+        let slice = gram
+            .as_slice()
+            .expect("C-contiguous f32 array required");
+        let (q_flat, inv_lam) = algorithms::eigh_f32(slice, n, damping as f32);
+        let q_arr = PyArray1::from_vec(py, q_flat)
+            .reshape([n, n])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let lam_arr = PyArray1::from_vec(py, inv_lam);
+        Ok((q_arr, lam_arr))
+    }
+
+    /// Apply the K-FAC eigen-basis preconditioner: ΔW = Q_G d_G Q_Gᵀ grad Q_A d_A Q_Aᵀ
+    ///
+    /// All 4 matrix products and the element-wise scaling are fused inside a single
+    /// Rust call, eliminating Python dispatch overhead for the per-step hot path.
+    ///
+    /// Args:
+    ///     q_g      : (d_out, d_out) float32 eigenvectors of G
+    ///     inv_lam_g: (d_out,)       float32 damped inverse eigenvalues of G
+    ///     grad     : (d_out, d_in)  float32 weight gradient
+    ///     q_a      : (d_in,  d_in)  float32 eigenvectors of A
+    ///     inv_lam_a: (d_in,)        float32 damped inverse eigenvalues of A
+    ///
+    /// Returns:
+    ///     (d_out, d_in) float32 preconditioned gradient
+    #[pyfunction]
+    pub fn apply_kfac_eigen_f32<'py>(
+        py: Python<'py>,
+        q_g: PyReadonlyArray2<'py, f32>,
+        inv_lam_g: PyReadonlyArray1<'py, f32>,
+        grad: PyReadonlyArray2<'py, f32>,
+        q_a: PyReadonlyArray2<'py, f32>,
+        inv_lam_a: PyReadonlyArray1<'py, f32>,
+    ) -> PyResult<&'py PyArray2<f32>> {
+        let d_out = grad.shape()[0];
+        let d_in  = grad.shape()[1];
+        let qg_s = q_g.as_slice().expect("C-contiguous q_g required");
+        let qa_s = q_a.as_slice().expect("C-contiguous q_a required");
+        let gr_s = grad.as_slice().expect("C-contiguous grad required");
+        let lg_s = inv_lam_g.as_slice().expect("C-contiguous inv_lam_g required");
+        let la_s = inv_lam_a.as_slice().expect("C-contiguous inv_lam_a required");
+        let result = algorithms::apply_kfac_eigen_f32(
+            qg_s, lg_s, d_out,
+            gr_s,
+            qa_s, la_s, d_in,
+        );
+        PyArray1::from_vec(py, result)
+            .reshape([d_out, d_in])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
     // -----------------------------------------------------------------------
     // Module registration
     // -----------------------------------------------------------------------
@@ -317,6 +391,8 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(lu_solve_gram_vec, m)?)?;
         m.add_function(wrap_pyfunction!(lu_inverse_gram, m)?)?;
         m.add_function(wrap_pyfunction!(lu_damped_inverse_f32, m)?)?;
+        m.add_function(wrap_pyfunction!(eigh_f32, m)?)?;
+        m.add_function(wrap_pyfunction!(apply_kfac_eigen_f32, m)?)?;
         Ok(())
     }
 }

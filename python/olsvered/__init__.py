@@ -16,6 +16,8 @@ from olsvered.olsvered import (  # noqa: F401
     lu_solve_gram_vec,
     lu_inverse_gram,
     lu_damped_inverse_f32,
+    eigh_f32,
+    apply_kfac_eigen_f32,
 )
 
 __all__ = [
