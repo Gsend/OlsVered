@@ -12,6 +12,10 @@ from olsvered.olsvered import (  # noqa: F401
     solve_ols,
     simplified_gram_schmidt,
     weighted_generalized_inverse,
+    lu_solve_gram,
+    lu_solve_gram_vec,
+    lu_inverse_gram,
+    lu_damped_inverse_f32,
 )
 
 __all__ = [
@@ -20,4 +24,8 @@ __all__ = [
     "solve_ols",
     "simplified_gram_schmidt",
     "weighted_generalized_inverse",
+    "lu_solve_gram",
+    "lu_solve_gram_vec",
+    "lu_inverse_gram",
+    "lu_damped_inverse_f32",
 ]

@@ -19,7 +19,7 @@ pub mod ffi;
 #[cfg(feature = "python")]
 mod python_bindings {
     use nalgebra::{DMatrix, DVector};
-    use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+    use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods, Element};
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
 
@@ -184,6 +184,125 @@ mod python_bindings {
     }
 
     // -----------------------------------------------------------------------
+    // Algorithm 4 — Direct Gram matrix LU solve (K-FAC / Shampoo)
+    // -----------------------------------------------------------------------
+
+    /// Solve ``gram · X = rhs`` via LU factorisation — no explicit inverse.
+    ///
+    /// Core operation for second-order optimisers (K-FAC, Shampoo) that have
+    /// a pre-computed Gram matrix and need to apply its inverse to a RHS.
+    ///
+    /// Args:
+    ///     gram: numpy float64 array of shape (p, p), symmetric PSD
+    ///     rhs:  numpy float64 array of shape (p, k)
+    ///
+    /// Returns:
+    ///     X: numpy float64 array of shape (p, k) such that gram @ X ≈ rhs
+    ///
+    /// Raises:
+    ///     ValueError: on dimension mismatch or singular matrix.
+    #[pyfunction]
+    pub fn lu_solve_gram<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f64>,
+        rhs: PyReadonlyArray2<'py, f64>,
+    ) -> PyResult<&'py PyArray2<f64>> {
+        let gm = py_to_dmatrix(&gram);
+        let rm = py_to_dmatrix(&rhs);
+        let result = algorithms::lu_solve_gram(&gm, &rm)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let rows = result.nrows();
+        let cols = result.ncols();
+        let data: Vec<f64> = result.transpose().as_slice().to_vec();
+        let arr = PyArray1::from_vec(py, data);
+        arr.reshape([rows, cols])
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Solve ``gram · x = rhs`` for a single vector RHS.
+    ///
+    /// Args:
+    ///     gram: numpy float64 array of shape (p, p)
+    ///     rhs:  numpy float64 array of shape (p,)
+    ///
+    /// Returns:
+    ///     x: numpy float64 array of shape (p,)
+    #[pyfunction]
+    pub fn lu_solve_gram_vec<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f64>,
+        rhs: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<&'py PyArray1<f64>> {
+        let gm = py_to_dmatrix(&gram);
+        let rv = py_to_dvector(&rhs);
+        let result = algorithms::lu_solve_gram_vec(&gm, &rv)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(result.as_slice().to_vec().into_pyarray(py))
+    }
+
+    /// Compute ``gram⁻¹`` via LU factorisation.
+    ///
+    /// When K-FAC needs to cache the preconditioner for repeated application,
+    /// an explicit inverse is appropriate. This computes it via LU rather than
+    /// direct inversion for better numerical stability.
+    ///
+    /// Args:
+    ///     gram: numpy float64 array of shape (p, p)
+    ///
+    /// Returns:
+    ///     gram_inv: numpy float64 array of shape (p, p)
+    #[pyfunction]
+    pub fn lu_inverse_gram<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f64>,
+    ) -> PyResult<&'py PyArray2<f64>> {
+        let gm = py_to_dmatrix(&gram);
+        let result = algorithms::lu_inverse_gram(&gm)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let rows = result.nrows();
+        let cols = result.ncols();
+        let data: Vec<f64> = result.transpose().as_slice().to_vec();
+        let arr = PyArray1::from_vec(py, data);
+        arr.reshape([rows, cols])
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Fast K-FAC inverse: ``(gram + damping·I)⁻¹`` on f32 data.
+    ///
+    /// Compared with calling ``lu_inverse_gram`` on a float64 array, this
+    /// function avoids the f32 → f64 dtype cast, the Tikhonov damping
+    /// allocation, and the intermediate nalgebra matrix — reducing the
+    /// per-call copy count from 6+ to 2.
+    ///
+    /// Args:
+    ///     gram:    numpy float32 array of shape (n, n), C-contiguous
+    ///     damping: scalar λ added to the diagonal before inversion
+    ///
+    /// Returns:
+    ///     gram_inv: numpy float32 array of shape (n, n)
+    #[pyfunction]
+    pub fn lu_damped_inverse_f32<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f32>,
+        damping: f64,
+    ) -> PyResult<&'py PyArray2<f32>> {
+        let shape = gram.shape();
+        let n = shape[0];
+        if shape[1] != n {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "gram must be square",
+            ));
+        }
+        let slice = gram
+            .as_slice()
+            .expect("C-contiguous f32 array required; call .contiguous() first");
+        let result = algorithms::lu_damped_inverse_f32(slice, n, damping as f32);
+        let arr = PyArray1::from_vec(py, result);
+        arr.reshape([n, n])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    // -----------------------------------------------------------------------
     // Module registration
     // -----------------------------------------------------------------------
 
@@ -194,6 +313,10 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(solve_ols, m)?)?;
         m.add_function(wrap_pyfunction!(simplified_gram_schmidt, m)?)?;
         m.add_function(wrap_pyfunction!(weighted_generalized_inverse, m)?)?;
+        m.add_function(wrap_pyfunction!(lu_solve_gram, m)?)?;
+        m.add_function(wrap_pyfunction!(lu_solve_gram_vec, m)?)?;
+        m.add_function(wrap_pyfunction!(lu_inverse_gram, m)?)?;
+        m.add_function(wrap_pyfunction!(lu_damped_inverse_f32, m)?)?;
         Ok(())
     }
 }

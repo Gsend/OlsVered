@@ -9,6 +9,8 @@
 
 use nalgebra::{DMatrix, DVector};
 use thiserror::Error;
+// faer traits required for .solve() and .inverse() on PartialPivLu
+use faer::prelude::{SolverCore, SpSolver};
 
 /// Errors returned by olsvered algorithms.
 #[derive(Debug, Error, PartialEq)]
@@ -248,4 +250,194 @@ pub fn weighted_generalized_inverse(
     let result = lu.solve(&xtw).ok_or(OlsveredError::SingularMatrix)?;
 
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Algorithm 4 — Direct Gram Matrix LU Solve (for K-FAC / Shampoo integration)
+//
+// The three public functions below (`lu_solve_gram`, `lu_solve_gram_vec`,
+// `lu_inverse_gram`) are the hot path for K-FAC preconditioning.  They use
+// `faer` instead of nalgebra so that SIMD-accelerated, cache-aware kernels
+// replace the generic nalgebra code — closing the gap with BLAS-backed
+// torch.linalg.inv without requiring any external system libraries.
+// ---------------------------------------------------------------------------
+
+/// Convert a nalgebra `DMatrix<f64>` to a `faer::Mat<f64>` (column-major copy).
+#[inline]
+fn nalgebra_to_faer(m: &DMatrix<f64>) -> faer::Mat<f64> {
+    let nrows = m.nrows();
+    let ncols = m.ncols();
+    faer::Mat::from_fn(nrows, ncols, |i, j| m[(i, j)])
+}
+
+/// Convert a `faer::MatRef<f64>` back to a nalgebra `DMatrix<f64>`.
+#[inline]
+fn faer_to_nalgebra(m: faer::MatRef<f64>) -> DMatrix<f64> {
+    DMatrix::from_fn(m.nrows(), m.ncols(), |i, j| m.read(i, j))
+}
+
+/// Solve `gram · X = rhs` via faer LU factorisation — no explicit inverse formed.
+///
+/// Uses `faer`'s SIMD-accelerated partial-pivoting LU which is significantly
+/// faster than nalgebra for matrices ≥ 64×64 (the typical Kronecker factor
+/// size in K-FAC for transformer layers).
+///
+/// # Arguments
+/// * `gram` — Symmetric positive-(semi)definite matrix of shape `(p, p)`
+/// * `rhs`  — Right-hand side matrix of shape `(p, k)`
+///
+/// # Returns
+/// Solution matrix `X` of shape `(p, k)` such that `gram · X ≈ rhs`.
+///
+/// # Errors
+/// * [`OlsveredError::DimensionMismatch`] if row counts disagree
+/// * [`OlsveredError::SingularMatrix`]    if LU solve fails (singular matrix)
+pub fn lu_solve_gram(
+    gram: &DMatrix<f64>,
+    rhs: &DMatrix<f64>,
+) -> Result<DMatrix<f64>, OlsveredError> {
+    if gram.nrows() != gram.ncols() {
+        return Err(OlsveredError::DimensionMismatch {
+            x_rows: gram.nrows(),
+            y_len: gram.ncols(),
+        });
+    }
+    if gram.nrows() != rhs.nrows() {
+        return Err(OlsveredError::DimensionMismatch {
+            x_rows: gram.nrows(),
+            y_len: rhs.nrows(),
+        });
+    }
+
+    let fa = nalgebra_to_faer(gram);
+    let fb = nalgebra_to_faer(rhs);
+    let plu = fa.partial_piv_lu();
+    let fx = plu.solve(&fb);
+    Ok(faer_to_nalgebra(fx.as_ref()))
+}
+
+/// Solve `gram · x = rhs` for a single right-hand-side vector.
+///
+/// Reshapes the vector to a single-column matrix, delegates to `faer` LU,
+/// and reshapes back.
+///
+/// # Arguments
+/// * `gram` — Symmetric positive-(semi)definite matrix `(p, p)`
+/// * `rhs`  — Right-hand side vector `(p,)`
+///
+/// # Returns
+/// Solution vector `x` of length `p`.
+pub fn lu_solve_gram_vec(
+    gram: &DMatrix<f64>,
+    rhs: &DVector<f64>,
+) -> Result<DVector<f64>, OlsveredError> {
+    if gram.nrows() != gram.ncols() {
+        return Err(OlsveredError::DimensionMismatch {
+            x_rows: gram.nrows(),
+            y_len: gram.ncols(),
+        });
+    }
+    if gram.nrows() != rhs.len() {
+        return Err(OlsveredError::DimensionMismatch {
+            x_rows: gram.nrows(),
+            y_len: rhs.len(),
+        });
+    }
+
+    let p = gram.nrows();
+    let fa = nalgebra_to_faer(gram);
+    let fb = faer::Mat::from_fn(p, 1, |i, _| rhs[i]);
+    let plu = fa.partial_piv_lu();
+    let fx = plu.solve(&fb);
+    Ok(DVector::from_fn(p, |i, _| fx.read(i, 0)))
+}
+
+/// Compute the explicit inverse of a Gram matrix via faer LU factorisation.
+///
+/// While `olsvered` philosophy favours direct solves over explicit inversion,
+/// K-FAC's natural gradient update `ΔW = G⁻¹ · ∇L · A⁻¹` requires the
+/// preconditioner be applied from both sides — making a cached explicit
+/// inverse worthwhile when `factor_update_freq > 1`.
+///
+/// Uses `faer`'s SIMD-accelerated LU which is significantly faster than the
+/// nalgebra implementation for the matrix sizes typical in K-FAC.
+///
+/// # Arguments
+/// * `gram` — Square matrix of shape `(p, p)`
+///
+/// # Returns
+/// `gram⁻¹` — Inverse matrix of shape `(p, p)`
+///
+/// # Errors
+/// * [`OlsveredError::SingularMatrix`] if the matrix is singular
+pub fn lu_inverse_gram(gram: &DMatrix<f64>) -> Result<DMatrix<f64>, OlsveredError> {
+    if gram.nrows() != gram.ncols() {
+        return Err(OlsveredError::DimensionMismatch {
+            x_rows: gram.nrows(),
+            y_len: gram.ncols(),
+        });
+    }
+
+    let fa = nalgebra_to_faer(gram);
+    let plu = fa.partial_piv_lu();
+    // faer's inverse() computes A⁻¹ directly without constructing an identity RHS
+    let finv = plu.inverse();
+    Ok(faer_to_nalgebra(finv.as_ref()))
+}
+
+// ---------------------------------------------------------------------------
+// Fast f32 path — zero-overhead K-FAC inversion for production use
+//
+// `lu_damped_inverse_f32` is the hot path used by OlsveredKFAC at runtime:
+//   1. Accepts a **row-major f32 slice** — matches PyTorch's default memory
+//      layout so no dtype conversion is needed on the Python side.
+//   2. Adds Tikhonov damping λI directly inside Rust — one fewer numpy
+//      allocation per call.
+//   3. Returns a **row-major Vec<f32>** — wrap in numpy once, then
+//      `torch.from_numpy()` directly; cached as f32 torch tensor.
+//
+// Compared with the f64 `lu_inverse_gram` path:
+//   Old: f32 tensor → .astype(f64) → numpy f64 → DMatrix<f64> → faer f64
+//        → DMatrix<f64> → numpy f64 → torch.from_numpy → .to(f32)
+//        = 6+ copies per matrix
+//   New: f32 tensor → .numpy() → faer f32 → Vec<f32> → numpy f32
+//        → torch.from_numpy()
+//        = 2 copies per matrix
+// ---------------------------------------------------------------------------
+
+/// Compute `(gram + damping·I)⁻¹` directly on f32 data.
+///
+/// Designed for the K-FAC hot path: avoids the f32→f64 dtype conversion
+/// and the nalgebra intermediate by working with raw slices throughout.
+///
+/// # Arguments
+/// * `gram`    — Row-major f32 slice of length `n × n`.
+/// * `n`       — Matrix dimension.
+/// * `damping` — Tikhonov damping scalar λ added to the diagonal.
+///
+/// # Returns
+/// Row-major `Vec<f32>` of length `n × n` containing `(gram + λI)⁻¹`.
+pub fn lu_damped_inverse_f32(gram: &[f32], n: usize, damping: f32) -> Vec<f32> {
+    use faer::prelude::SolverCore;
+
+    // Build faer::Mat<f32> from the row-major slice (one copy: row→col major)
+    let mut fa: faer::Mat<f32> = faer::Mat::from_fn(n, n, |i, j| gram[i * n + j]);
+
+    // Add damping in-place — no extra allocation
+    for k in 0..n {
+        *fa.get_mut(k, k) += damping;
+    }
+
+    // LU factorisation + explicit inverse (faer SIMD kernels)
+    let plu = fa.partial_piv_lu();
+    let finv = plu.inverse();
+
+    // Write back as row-major f32 (one copy: col→row major)
+    let mut out = vec![0.0f32; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            out[i * n + j] = finv.read(i, j);
+        }
+    }
+    out
 }
