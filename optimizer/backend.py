@@ -195,6 +195,73 @@ def apply_kfac_eigen_f32(
     return (q_g @ tmp @ q_a.T)
 
 
+def eigh_topk_f32(gram: np.ndarray, k: int, damping: float):
+    """Low-rank symmetric EVD: top-k eigenvectors and damped inverse eigenvalues.
+
+    Like ``eigh_f32`` but returns only the k largest eigenvectors, giving an n×k
+    matrix Q_k.  The apply step then costs O((k_g+k_a)·d_out·d_in) instead of
+    O(4·n·d_out·d_in) — the genuine speedup over full-rank eigen.
+
+    Parameters
+    ----------
+    gram : np.ndarray, shape (n, n), float32 or float64
+        Symmetric positive-(semi)definite Gram matrix.
+    k : int
+        Number of top eigenvectors to keep.
+    damping : float
+        Scalar δ — returns ``1 / max(λᵢ + δ, 1e-8)``.
+
+    Returns
+    -------
+    q_k : np.ndarray, shape (n, k), float32 — top-k eigenvectors as columns
+    inv_lambda_k : np.ndarray, shape (k,), float32 — damped inverse eigenvalues
+    """
+    if _HAS_RUST:
+        g32 = np.ascontiguousarray(gram, dtype=np.float32)
+        return _rust_backend.eigh_topk_f32(g32, int(k), float(damping))
+    # numpy fallback — eigh returns ascending order, take last k
+    g64 = gram.astype(np.float64)
+    eigenvalues, q = np.linalg.eigh(g64)
+    top_k_idx = slice(-k, None)
+    inv_lam_k = (1.0 / np.maximum(eigenvalues[top_k_idx] + damping, 1e-8)).astype(np.float32)
+    q_k = q[:, top_k_idx].astype(np.float32)
+    return q_k, inv_lam_k
+
+
+def apply_kfac_lowrank_f32(
+    q_g_k: np.ndarray, inv_lam_g_k: np.ndarray,
+    grad: np.ndarray,
+    q_a_k: np.ndarray, inv_lam_a_k: np.ndarray,
+) -> np.ndarray:
+    """Apply low-rank K-FAC preconditioner: ΔW ≈ Q_G_k d_G_k Q_G_kᵀ grad Q_A_k d_A_k Q_A_kᵀ.
+
+    Uses rank-k approximations of A and G, reducing apply cost from
+    O(4n·d_out·d_in) to O((k_g+k_a)·d_out·d_in).
+
+    Parameters
+    ----------
+    q_g_k, inv_lam_g_k : eigenvectors (d_out×k_g) and inverse eigenvalues (k_g,) of G
+    grad               : weight gradient (d_out × d_in)
+    q_a_k, inv_lam_a_k : eigenvectors (d_in×k_a) and inverse eigenvalues (k_a,) of A
+
+    Returns
+    -------
+    np.ndarray, shape (d_out, d_in), float32 — preconditioned gradient
+    """
+    if _HAS_RUST:
+        return _rust_backend.apply_kfac_lowrank_f32(
+            np.ascontiguousarray(q_g_k,      dtype=np.float32),
+            np.ascontiguousarray(inv_lam_g_k, dtype=np.float32),
+            np.ascontiguousarray(grad,        dtype=np.float32),
+            np.ascontiguousarray(q_a_k,       dtype=np.float32),
+            np.ascontiguousarray(inv_lam_a_k, dtype=np.float32),
+        )
+    # numpy fallback
+    tmp = q_g_k.T @ grad.astype(np.float32) @ q_a_k        # (k_g × k_a)
+    tmp = tmp * np.outer(inv_lam_g_k, inv_lam_a_k)
+    return (q_g_k @ tmp @ q_a_k.T)                         # (d_out × d_in)
+
+
 def get_backend_name() -> str:
     """Return the name of the active backend."""
     return "olsvered (Rust)" if _HAS_RUST else "numpy/scipy (fallback)"

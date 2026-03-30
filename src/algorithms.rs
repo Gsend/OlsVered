@@ -484,6 +484,125 @@ pub fn eigh_f32(gram: &[f32], n: usize, damping: f32) -> (Vec<f32>, Vec<f32>) {
     (q_flat, inv_lambda)
 }
 
+/// Low-rank symmetric eigendecomposition: return top-k eigenvectors and inverse eigenvalues.
+///
+/// Like [`eigh_f32`] but returns only the `k` eigenvectors corresponding to the
+/// **largest** eigenvalues.  This gives a rank-k approximation
+/// `gram ≈ Q_k · diag(λ_k) · Q_kᵀ` and allows the K-FAC apply step to use
+/// `d_out × k` and `d_in × k` matrices instead of full `n × n` ones,
+/// reducing the apply cost from O(4 n d_out d_in) to O((k_g + k_a) d_out d_in).
+///
+/// # Arguments
+/// * `gram`    — Row-major `n×n` f32 slice (symmetric, PSD).
+/// * `n`       — Matrix dimension.
+/// * `k`       — Number of top eigenvectors to keep (1 ≤ k ≤ n).
+/// * `damping` — Scalar δ: returns `1 / max(λᵢ + δ, 1e-8)`.
+///
+/// # Returns
+/// `(q_k_flat, inv_lambda_k)` where:
+/// * `q_k_flat` is row-major `n × k` f32 — top-k eigenvectors as columns.
+/// * `inv_lambda_k` is length-k f32 with values `1 / max(λᵢ + δ, 1e-8)`.
+pub fn eigh_topk_f32(gram: &[f32], n: usize, k: usize, damping: f32) -> (Vec<f32>, Vec<f32>) {
+    use faer::linalg::solvers::SelfAdjointEigendecomposition;
+
+    let k = k.min(n);
+    let fa = faer::Mat::<f32>::from_fn(n, n, |i, j| gram[i * n + j]);
+    let eig = SelfAdjointEigendecomposition::<f32>::new(fa.as_ref(), faer::Side::Lower);
+
+    // faer sorts eigenvalues ascending; top-k are at indices n-k .. n
+    let offset = n - k;
+
+    let inv_lambda_k: Vec<f32> = (offset..n)
+        .map(|i| {
+            let lam = eig.s().column_vector().read(i);
+            1.0_f32 / (lam + damping).max(1e-8_f32)
+        })
+        .collect();
+
+    // Q_k: n×k matrix, row-major: q_k_flat[i*k + j] = Q[i, offset+j]
+    let q = eig.u();
+    let mut q_k_flat = vec![0.0_f32; n * k];
+    for i in 0..n {
+        for j in 0..k {
+            q_k_flat[i * k + j] = q.read(i, offset + j);
+        }
+    }
+
+    (q_k_flat, inv_lambda_k)
+}
+
+/// Apply the low-rank K-FAC preconditioner to a weight gradient.
+///
+/// Uses rank-k approximations of A and G:
+///   `ΔW ≈ Q_G_k · diag(d_G_k) · (Q_G_kᵀ · grad · Q_A_k) · diag(d_A_k) · Q_A_kᵀ`
+///
+/// Cost vs full eigen: O((k_g + k_a) · d_out · d_in) instead of O(4 · n · d_out · d_in).
+/// For k = 32, n = 512 this is ~16× fewer FLOPs in the apply step.
+///
+/// # Arguments
+/// * `q_g_k`      — Row-major `d_out × k_g` f32 top-k eigenvectors of G.
+/// * `k_g`        — Rank used for G.
+/// * `inv_lam_g_k`— Length-`k_g` damped inverse eigenvalues of G.
+/// * `grad`       — Row-major `d_out × d_in` f32 weight gradient.
+/// * `d_out`      — Output dimension.
+/// * `d_in`       — Input dimension.
+/// * `q_a_k`      — Row-major `d_in × k_a` f32 top-k eigenvectors of A.
+/// * `k_a`        — Rank used for A.
+/// * `inv_lam_a_k`— Length-`k_a` damped inverse eigenvalues of A.
+///
+/// # Returns
+/// Row-major `d_out × d_in` f32 preconditioned gradient.
+pub fn apply_kfac_lowrank_f32(
+    q_g_k: &[f32], k_g: usize, inv_lam_g_k: &[f32],
+    grad: &[f32], d_out: usize, d_in: usize,
+    q_a_k: &[f32], k_a: usize, inv_lam_a_k: &[f32],
+) -> Vec<f32> {
+    use faer::linalg::matmul::matmul;
+
+    // Load matrices: Q_G_k (d_out × k_g), Q_A_k (d_in × k_a), grad (d_out × d_in)
+    let qg = faer::Mat::<f32>::from_fn(d_out, k_g, |i, j| q_g_k[i * k_g + j]);
+    let qa = faer::Mat::<f32>::from_fn(d_in,  k_a, |i, j| q_a_k[i * k_a + j]);
+    let gr = faer::Mat::<f32>::from_fn(d_out, d_in, |i, j| grad[i * d_in + j]);
+
+    // Step 1: tmp1 = Q_G_kᵀ @ grad   (k_g × d_in)
+    let mut tmp1 = faer::Mat::<f32>::zeros(k_g, d_in);
+    matmul(tmp1.as_mut(), qg.transpose(), gr.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 2: tmp2 = tmp1 @ Q_A_k   (k_g × k_a)  — cheap inner product
+    let mut tmp2 = faer::Mat::<f32>::zeros(k_g, k_a);
+    matmul(tmp2.as_mut(), tmp1.as_ref(), qa.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 3: scale (k_g × k_a) by inv_lam_g[i] * inv_lam_a[j]
+    for i in 0..k_g {
+        let sg = inv_lam_g_k[i];
+        for j in 0..k_a {
+            let v = tmp2.read(i, j);
+            tmp2.write(i, j, v * sg * inv_lam_a_k[j]);
+        }
+    }
+
+    // Step 4: tmp3 = Q_G_k @ tmp2   (d_out × k_a)
+    let mut tmp3 = faer::Mat::<f32>::zeros(d_out, k_a);
+    matmul(tmp3.as_mut(), qg.as_ref(), tmp2.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 5: result = tmp3 @ Q_A_kᵀ   (d_out × d_in)
+    let mut result = faer::Mat::<f32>::zeros(d_out, d_in);
+    matmul(result.as_mut(), tmp3.as_ref(), qa.transpose(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Extract row-major
+    let mut out = vec![0.0_f32; d_out * d_in];
+    for i in 0..d_out {
+        for j in 0..d_in {
+            out[i * d_in + j] = result.read(i, j);
+        }
+    }
+    out
+}
+
 /// Apply the K-FAC eigen-basis preconditioner to a weight gradient.
 ///
 /// Computes: `ΔW = Q_G · diag(d_G) · (Q_Gᵀ · grad · Q_A) · diag(d_A) · Q_Aᵀ`

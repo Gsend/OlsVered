@@ -336,6 +336,89 @@ mod python_bindings {
         Ok((q_arr, lam_arr))
     }
 
+    /// Low-rank symmetric EVD: return top-k eigenvectors and damped inverse eigenvalues.
+    ///
+    /// Like ``eigh_f32`` but returns only the ``k`` eigenvectors for the largest eigenvalues,
+    /// giving an n×k matrix Q_k.  The apply step then costs O((k_g+k_a)·d_out·d_in) instead
+    /// of O(4·n·d_out·d_in), which is the genuine speedup over the full-rank eigen path.
+    ///
+    /// Args:
+    ///     gram   : numpy float32 array of shape (n, n), symmetric PSD
+    ///     k      : number of top eigenvectors to keep
+    ///     damping: scalar δ — returns 1 / max(λᵢ + δ, 1e-8)
+    ///
+    /// Returns:
+    ///     (q_k, inv_lambda_k) where q_k is (n, k) float32 and inv_lambda_k is (k,) float32
+    #[pyfunction]
+    pub fn eigh_topk_f32<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f32>,
+        k: usize,
+        damping: f64,
+    ) -> PyResult<(&'py PyArray2<f32>, &'py PyArray1<f32>)> {
+        let shape = gram.shape();
+        let n = shape[0];
+        if shape[1] != n {
+            return Err(pyo3::exceptions::PyValueError::new_err("gram must be square"));
+        }
+        if k == 0 || k > n {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("k must be in [1, n], got k={k}, n={n}"),
+            ));
+        }
+        let slice = gram
+            .as_slice()
+            .expect("C-contiguous f32 array required");
+        let (q_flat, inv_lam) = algorithms::eigh_topk_f32(slice, n, k, damping as f32);
+        let q_arr = PyArray1::from_vec(py, q_flat)
+            .reshape([n, k])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let lam_arr = PyArray1::from_vec(py, inv_lam);
+        Ok((q_arr, lam_arr))
+    }
+
+    /// Apply the low-rank K-FAC preconditioner: ΔW ≈ Q_G_k d_G_k Q_G_kᵀ grad Q_A_k d_A_k Q_A_kᵀ
+    ///
+    /// Uses rank-k approximations of A and G, reducing apply cost from O(4n·d_out·d_in)
+    /// to O((k_g+k_a)·d_out·d_in).  For k=32, n=512 this is ~16× fewer FLOPs.
+    ///
+    /// Args:
+    ///     q_g_k      : (d_out, k_g) float32 top-k eigenvectors of G
+    ///     inv_lam_g_k: (k_g,)       float32 damped inverse eigenvalues of G
+    ///     grad       : (d_out, d_in) float32 weight gradient
+    ///     q_a_k      : (d_in,  k_a) float32 top-k eigenvectors of A
+    ///     inv_lam_a_k: (k_a,)       float32 damped inverse eigenvalues of A
+    ///
+    /// Returns:
+    ///     (d_out, d_in) float32 preconditioned gradient
+    #[pyfunction]
+    pub fn apply_kfac_lowrank_f32<'py>(
+        py: Python<'py>,
+        q_g_k: PyReadonlyArray2<'py, f32>,
+        inv_lam_g_k: PyReadonlyArray1<'py, f32>,
+        grad: PyReadonlyArray2<'py, f32>,
+        q_a_k: PyReadonlyArray2<'py, f32>,
+        inv_lam_a_k: PyReadonlyArray1<'py, f32>,
+    ) -> PyResult<&'py PyArray2<f32>> {
+        let d_out = grad.shape()[0];
+        let d_in  = grad.shape()[1];
+        let k_g   = q_g_k.shape()[1];
+        let k_a   = q_a_k.shape()[1];
+        let qg_s  = q_g_k.as_slice().expect("C-contiguous q_g_k required");
+        let qa_s  = q_a_k.as_slice().expect("C-contiguous q_a_k required");
+        let gr_s  = grad.as_slice().expect("C-contiguous grad required");
+        let lg_s  = inv_lam_g_k.as_slice().expect("C-contiguous inv_lam_g_k required");
+        let la_s  = inv_lam_a_k.as_slice().expect("C-contiguous inv_lam_a_k required");
+        let result = algorithms::apply_kfac_lowrank_f32(
+            qg_s, k_g, lg_s,
+            gr_s, d_out, d_in,
+            qa_s, k_a, la_s,
+        );
+        PyArray1::from_vec(py, result)
+            .reshape([d_out, d_in])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
     /// Apply the K-FAC eigen-basis preconditioner: ΔW = Q_G d_G Q_Gᵀ grad Q_A d_A Q_Aᵀ
     ///
     /// All 4 matrix products and the element-wise scaling are fused inside a single
@@ -393,6 +476,8 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(lu_damped_inverse_f32, m)?)?;
         m.add_function(wrap_pyfunction!(eigh_f32, m)?)?;
         m.add_function(wrap_pyfunction!(apply_kfac_eigen_f32, m)?)?;
+        m.add_function(wrap_pyfunction!(eigh_topk_f32, m)?)?;
+        m.add_function(wrap_pyfunction!(apply_kfac_lowrank_f32, m)?)?;
         Ok(())
     }
 }
