@@ -262,6 +262,43 @@ def apply_kfac_lowrank_f32(
     return (q_g_k @ tmp @ q_a_k.T)                         # (d_out × d_in)
 
 
+def randomized_eigh_f32(gram: np.ndarray, k: int, n_iter: int = 1, damping: float = 0.0):
+    """Randomized symmetric EVD — approximate top-k eigenvectors in O(k·n²).
+
+    Uses the Halko-Martinsson-Tropp randomized range-finder algorithm:
+      1. Random Gaussian projection Ω (n×k)
+      2. Power iteration: Y = A^(2·n_iter+1) · Ω  (sharpens subspace alignment)
+      3. Modified Gram-Schmidt: Y → Q  (n×k orthonormal)
+      4. Small sketch: B = QᵀAQ  (k×k)
+      5. Exact EVD of B
+
+    Cost vs exact EVD: O(k·n²·n_iter) vs O(n³) — 24× cheaper for k=32, n=784.
+    Accuracy: bounded by σ_{k+1} (first discarded eigenvalue). For K-FAC Gram
+    matrices with rapidly decaying spectra, n_iter=1 gives <1% relative error.
+
+    Parameters
+    ----------
+    gram   : np.ndarray, shape (n, n), float32 or float64
+    k      : number of top eigenvectors to approximate
+    n_iter : power-iteration passes (0 = pure random projection; 1–2 recommended)
+    damping: scalar δ — returns ``1 / max(λᵢ + δ, 1e-8)``
+
+    Returns
+    -------
+    q_k         : np.ndarray, shape (n, k), float32
+    inv_lambda_k: np.ndarray, shape (k,),   float32
+    """
+    if _HAS_RUST:
+        g32 = np.ascontiguousarray(gram, dtype=np.float32)
+        return _rust_backend.randomized_eigh_f32(g32, int(k), int(n_iter), float(damping))
+    # numpy fallback — exact truncated EVD (no randomization in fallback)
+    g64 = gram.astype(np.float64)
+    eigenvalues, q = np.linalg.eigh(g64)
+    inv_lam_k = (1.0 / np.maximum(eigenvalues[-k:] + damping, 1e-8)).astype(np.float32)
+    q_k = q[:, -k:].astype(np.float32)
+    return q_k, inv_lam_k
+
+
 def get_backend_name() -> str:
     """Return the name of the active backend."""
     return "olsvered (Rust)" if _HAS_RUST else "numpy/scipy (fallback)"

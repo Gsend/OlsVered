@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from optimizer.backend import eigh_f32, apply_kfac_eigen_f32, eigh_topk_f32
+from optimizer.backend import eigh_f32, apply_kfac_eigen_f32, eigh_topk_f32, randomized_eigh_f32
 from optimizer.hooks import KFACHooks
 
 
@@ -48,7 +48,16 @@ class OlsveredKFAC(torch.optim.Optimizer):
         If set, use a rank-k approximation of A and G instead of the full
         eigen basis.  Reduces apply cost from O(4·n·d_out·d_in) to
         O((rank_g + rank_a)·d_out·d_in) — genuinely faster for rank << n.
-        None (default) uses the full eigen basis (same as before).
+        None (default) uses the full eigen basis.
+    randomized : bool
+        When True (default) and rank is set, use randomized EVD to find the
+        top-k eigenvectors in O(k·n²) instead of O(n³).  This removes the
+        last remaining cost disadvantage vs ClassicKFAC at the inversion step.
+        Has no effect when rank is None.
+    n_power_iter : int
+        Number of power-iteration passes for the randomized EVD (default 1).
+        More passes = more accurate but more expensive.  1 is sufficient for
+        K-FAC Gram matrices whose eigenvalues decay rapidly.
     """
 
     def __init__(
@@ -61,6 +70,8 @@ class OlsveredKFAC(torch.optim.Optimizer):
         weight_decay: float = 0.0,
         momentum: float = 0.9,
         rank: Optional[int] = None,
+        randomized: bool = True,
+        n_power_iter: int = 1,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -75,7 +86,9 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.damping = damping
         self.factor_update_freq = factor_update_freq
         self.inv_update_freq = inv_update_freq
-        self.rank = rank  # None → full eigen basis; int → low-rank truncation
+        self.rank = rank
+        self.randomized = randomized      # use randomized EVD when rank is set
+        self.n_power_iter = n_power_iter  # power-iteration passes for randomized EVD
 
         # Hook infrastructure
         self.hooks = KFACHooks(model)
@@ -130,12 +143,17 @@ class OlsveredKFAC(torch.optim.Optimizer):
             G_np = np.ascontiguousarray(G.cpu().numpy(), dtype=np.float32)
 
             if self.rank is not None:
-                # Low-rank truncation: top-k eigenvectors only.
-                # Q_A: (d_in  × k), Q_G: (d_out × k) — much cheaper apply.
                 k_a = min(self.rank, A_np.shape[0])
                 k_g = min(self.rank, G_np.shape[0])
-                Q_A, inv_lam_A = eigh_topk_f32(A_np, k_a, self.damping)
-                Q_G, inv_lam_G = eigh_topk_f32(G_np, k_g, self.damping)
+                if self.randomized:
+                    # Randomized EVD: O(k·n²) — removes inversion cost disadvantage.
+                    # Default path when rank is set.
+                    Q_A, inv_lam_A = randomized_eigh_f32(A_np, k_a, self.n_power_iter, self.damping)
+                    Q_G, inv_lam_G = randomized_eigh_f32(G_np, k_g, self.n_power_iter, self.damping)
+                else:
+                    # Exact truncated EVD: O(n³) then keep top-k.
+                    Q_A, inv_lam_A = eigh_topk_f32(A_np, k_a, self.damping)
+                    Q_G, inv_lam_G = eigh_topk_f32(G_np, k_g, self.damping)
             else:
                 # Full eigen basis (n×n matrices)
                 Q_A, inv_lam_A = eigh_f32(A_np, self.damping)

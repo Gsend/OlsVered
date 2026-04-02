@@ -20,6 +20,7 @@ from olsvered.olsvered import (  # noqa: F401
     apply_kfac_eigen_f32,
     eigh_topk_f32,
     apply_kfac_lowrank_f32,
+    randomized_eigh_f32,
 )
 
 __all__ = [

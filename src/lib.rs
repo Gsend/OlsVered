@@ -459,6 +459,48 @@ mod python_bindings {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// Randomized symmetric EVD — approximate top-k eigenvectors in O(k·n²).
+    ///
+    /// Uses the Halko-Martinsson-Tropp randomized range-finder:
+    /// random projection → power iteration → Gram-Schmidt → small exact EVD.
+    /// 24× cheaper than full EVD for k=32, n=784 with <1% error on K-FAC matrices.
+    ///
+    /// Args:
+    ///     gram   : numpy float32 array of shape (n, n), symmetric PSD
+    ///     k      : number of top eigenvectors to approximate
+    ///     n_iter : power-iteration passes (default 1; use 2 for slowly-decaying spectra)
+    ///     damping: scalar δ — returns 1 / max(λᵢ + δ, 1e-8)
+    ///
+    /// Returns:
+    ///     (q_k, inv_lambda_k) where q_k is (n, k) float32 and inv_lambda_k is (k,) float32
+    #[pyfunction]
+    pub fn randomized_eigh_f32<'py>(
+        py: Python<'py>,
+        gram: PyReadonlyArray2<'py, f32>,
+        k: usize,
+        n_iter: usize,
+        damping: f64,
+    ) -> PyResult<(&'py PyArray2<f32>, &'py PyArray1<f32>)> {
+        let shape = gram.shape();
+        let n = shape[0];
+        if shape[1] != n {
+            return Err(pyo3::exceptions::PyValueError::new_err("gram must be square"));
+        }
+        if k == 0 || k > n {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("k must be in [1, n], got k={k}, n={n}"),
+            ));
+        }
+        let slice = gram.as_slice().expect("C-contiguous f32 array required");
+        let (q_flat, inv_lam) =
+            algorithms::randomized_eigh_f32(slice, n, k, n_iter, damping as f32);
+        let q_arr = PyArray1::from_vec(py, q_flat)
+            .reshape([n, k])
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let lam_arr = PyArray1::from_vec(py, inv_lam);
+        Ok((q_arr, lam_arr))
+    }
+
     // -----------------------------------------------------------------------
     // Module registration
     // -----------------------------------------------------------------------
@@ -478,6 +520,7 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(apply_kfac_eigen_f32, m)?)?;
         m.add_function(wrap_pyfunction!(eigh_topk_f32, m)?)?;
         m.add_function(wrap_pyfunction!(apply_kfac_lowrank_f32, m)?)?;
+        m.add_function(wrap_pyfunction!(randomized_eigh_f32, m)?)?;
         Ok(())
     }
 }

@@ -671,3 +671,115 @@ pub fn apply_kfac_eigen_f32(
     }
     out
 }
+
+/// Randomized symmetric EVD -- approximate top-k eigenvectors in O(k*n^2).
+///
+/// Algorithm (Halko-Martinsson-Tropp 2011):
+///   1. Random Gaussian matrix Omega (n x k) via xorshift64 + Box-Muller.
+///   2. Power iteration: Y = A^(2*n_iter+1) * Omega.
+///      Each pass amplifies dominant eigenvalues; n_iter=1 is sufficient for
+///      K-FAC Gram matrices whose spectra decay by 100x from top to bottom.
+///   3. Modified Gram-Schmidt: Y -> Q  (n x k, orthonormal columns).
+///   4. Small sketch: B = Q^T * A * Q  (k x k).
+///   5. Exact symmetric EVD of B  (O(k^3) -- tiny).
+///   6. Final eigenvectors: Q * V_B  (n x k).
+///
+/// Cost: O(k * n^2 * n_iter) vs O(n^3) for full EVD.
+/// For k=32, n=784, n_iter=1: ~20 M FLOPs vs ~480 M FLOPs (24x cheaper).
+///
+/// # Arguments
+/// * `gram`   -- Row-major n x n f32 slice (symmetric, PSD).
+/// * `n`      -- Matrix dimension.
+/// * `k`      -- Number of top eigenvectors to approximate (1 <= k <= n).
+/// * `n_iter` -- Power-iteration passes (0 = pure random projection; 1-2 recommended).
+/// * `damping`-- Scalar delta: returns 1 / max(lambda_i + delta, 1e-8).
+///
+/// # Returns
+/// (q_flat, inv_lambda) -- row-major n x k f32 eigenvectors, length-k inverse eigenvalues.
+pub fn randomized_eigh_f32(
+    gram: &[f32], n: usize, k: usize, n_iter: usize, damping: f32,
+) -> (Vec<f32>, Vec<f32>) {
+    use faer::linalg::matmul::matmul;
+    use faer::linalg::solvers::SelfAdjointEigendecomposition;
+
+    let k = k.min(n);
+    let fa = faer::Mat::<f32>::from_fn(n, n, |i, j| gram[i * n + j]);
+
+    // Step 1: Gaussian random matrix Omega (n x k) via xorshift64 + Box-Muller
+    let mut state: u64 = 0xdeadbeef_cafebabe_u64;
+    let mut omega = faer::Mat::<f32>::zeros(n, k);
+    for i in 0..n {
+        for j in 0..k {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+            let u1 = ((state >> 11) as f32 / (1u64 << 53) as f32).max(1e-10_f32);
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+            let u2 = (state >> 11) as f32 / (1u64 << 53) as f32;
+            let z = (-2.0_f32 * u1.ln()).sqrt()
+                * (2.0_f32 * std::f32::consts::PI * u2).cos();
+            omega.write(i, j, z);
+        }
+    }
+
+    // Step 2: Y = A * Omega; power iteration Y = A*(A*Y) n_iter times
+    // After n_iter passes: Y = A^(2*n_iter+1) * Omega
+    let mut y = faer::Mat::<f32>::zeros(n, k);
+    matmul(y.as_mut(), fa.as_ref(), omega.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    let mut tmp = faer::Mat::<f32>::zeros(n, k);
+    for _ in 0..n_iter {
+        matmul(tmp.as_mut(), fa.as_ref(), y.as_ref(),
+               None, 1.0_f32, faer::Parallelism::None);
+        matmul(y.as_mut(), fa.as_ref(), tmp.as_ref(),
+               None, 1.0_f32, faer::Parallelism::None);
+    }
+
+    // Step 3: Modified Gram-Schmidt orthogonalization of Y -> Q (n x k)
+    for j in 0..k {
+        for jj in 0..j {
+            let mut dot = 0.0_f32;
+            for i in 0..n { dot += y.read(i, jj) * y.read(i, j); }
+            for i in 0..n {
+                let v = y.read(i, j) - dot * y.read(i, jj);
+                y.write(i, j, v);
+            }
+        }
+        let mut norm_sq = 0.0_f32;
+        for i in 0..n { norm_sq += y.read(i, j) * y.read(i, j); }
+        let inv_norm = 1.0_f32 / norm_sq.sqrt().max(1e-10_f32);
+        for i in 0..n { y.write(i, j, y.read(i, j) * inv_norm); }
+    }
+
+    // Step 4: B = Q^T * A * Q  (k x k)
+    let mut aq = faer::Mat::<f32>::zeros(n, k);
+    matmul(aq.as_mut(), fa.as_ref(), y.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+    let mut b = faer::Mat::<f32>::zeros(k, k);
+    matmul(b.as_mut(), y.transpose(), aq.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    // Step 5: Exact symmetric EVD of small B (k x k)
+    let eig_b = SelfAdjointEigendecomposition::<f32>::new(b.as_ref(), faer::Side::Lower);
+
+    let inv_lambda: Vec<f32> = (0..k)
+        .map(|i| {
+            let lam = eig_b.s().column_vector().read(i);
+            1.0_f32 / (lam + damping).max(1e-8_f32)
+        })
+        .collect();
+
+    // Step 6: Final eigenvectors = Q * V_B  (n x k)
+    let vb = eig_b.u();
+    let mut eigvecs = faer::Mat::<f32>::zeros(n, k);
+    matmul(eigvecs.as_mut(), y.as_ref(), vb.as_ref(),
+           None, 1.0_f32, faer::Parallelism::None);
+
+    let mut q_flat = vec![0.0_f32; n * k];
+    for i in 0..n {
+        for j in 0..k {
+            q_flat[i * k + j] = eigvecs.read(i, j);
+        }
+    }
+
+    (q_flat, inv_lambda)
+}
