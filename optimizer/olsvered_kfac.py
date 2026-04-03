@@ -48,16 +48,34 @@ class OlsveredKFAC(torch.optim.Optimizer):
         If set, use a rank-k approximation of A and G instead of the full
         eigen basis.  Reduces apply cost from O(4·n·d_out·d_in) to
         O((rank_g + rank_a)·d_out·d_in) — genuinely faster for rank << n.
-        None (default) uses the full eigen basis.
+        None (default) uses the full eigen basis.  Ignored when adaptive=True.
     randomized : bool
-        When True (default) and rank is set, use randomized EVD to find the
-        top-k eigenvectors in O(k·n²) instead of O(n³).  This removes the
-        last remaining cost disadvantage vs ClassicKFAC at the inversion step.
-        Has no effect when rank is None.
+        When True (default) and rank is set (or adaptive=True), use randomized
+        EVD to find the top-k eigenvectors in O(k·n²) instead of O(n³).
+        Has no effect when neither rank nor adaptive is set.
     n_power_iter : int
         Number of power-iteration passes for the randomized EVD (default 1).
         More passes = more accurate but more expensive.  1 is sufficient for
         K-FAC Gram matrices whose eigenvalues decay rapidly.
+    adaptive : bool
+        When True, automatically choose the rank for each Gram matrix based on
+        its size rather than applying a single global rank.  Rules applied
+        per matrix:
+          - n < adaptive_min_n  →  full EVD (no low-rank approximation)
+          - n >= adaptive_min_n →  k = min(adaptive_rank_budget, n)
+        This avoids the overhead of low-rank EVD on small layers (where it
+        can actually be slower) while still speeding up large layers.
+        Default: False.  Overrides the ``rank`` parameter when True.
+    adaptive_min_n : int
+        Minimum Gram matrix dimension to apply low-rank approximation.
+        Matrices smaller than this use full EVD regardless of rank budget.
+        Default: 256 (empirically safe — layers with n < 256 are too small
+        to benefit from truncation at typical batch sizes).
+    adaptive_rank_budget : int
+        Maximum rank k to use when adaptive=True and n >= adaptive_min_n.
+        Should match roughly the batch size used for training (the effective
+        rank of a Gram matrix from a batch of B samples is at most B).
+        Default: 64.
     """
 
     def __init__(
@@ -72,6 +90,9 @@ class OlsveredKFAC(torch.optim.Optimizer):
         rank: Optional[int] = None,
         randomized: bool = True,
         n_power_iter: int = 1,
+        adaptive: bool = False,
+        adaptive_min_n: int = 256,
+        adaptive_rank_budget: int = 64,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -89,6 +110,13 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.rank = rank
         self.randomized = randomized      # use randomized EVD when rank is set
         self.n_power_iter = n_power_iter  # power-iteration passes for randomized EVD
+        self.adaptive = adaptive
+        self.adaptive_min_n = adaptive_min_n
+        self.adaptive_rank_budget = adaptive_rank_budget
+
+        # Per-layer rank choices recorded during _update_inverses for inspection.
+        # Keys are module objects; values are (k_a, k_g) — None means full EVD.
+        self.layer_ranks_: Dict[nn.Module, Tuple[Optional[int], Optional[int]]] = {}
 
         # Hook infrastructure
         self.hooks = KFACHooks(model)
@@ -120,6 +148,47 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.hooks.clear()
         self.timing["factor_compute"].append(time.perf_counter() - t0)
 
+    # ------------------------------------------------------------------
+    # Rank-selection helpers
+    # ------------------------------------------------------------------
+
+    def _effective_rank(self, n: int) -> Optional[int]:
+        """Return the rank k to use for an n×n Gram matrix, or None for full EVD.
+
+        Priority:
+          1. adaptive=True   → per-matrix rule based on n
+          2. rank is not None → fixed global rank (clamped to n)
+          3. fallback        → None (full EVD)
+        """
+        if self.adaptive:
+            if n < self.adaptive_min_n:
+                return None  # small matrix: full EVD avoids overhead
+            return min(self.adaptive_rank_budget, n)
+        if self.rank is not None:
+            return min(self.rank, n)
+        return None  # full EVD
+
+    def _decompose(self, mat_np: np.ndarray, k: Optional[int]):
+        """Run EVD on a Gram matrix and return (Q, inv_lam) as numpy arrays.
+
+        Parameters
+        ----------
+        mat_np : (n, n) float32 contiguous array
+        k      : None → full EVD returning Q (n×n); int → low-rank returning Q (n×k)
+
+        Returns
+        -------
+        Q        : (n, n) or (n, k) float32
+        inv_lam  : (n,) or (k,) float32 — 1 / (λ + damping)
+        """
+        if k is None:
+            return eigh_f32(mat_np, self.damping)
+        if self.randomized:
+            return randomized_eigh_f32(mat_np, k, self.n_power_iter, self.damping)
+        return eigh_topk_f32(mat_np, k, self.damping)
+
+    # ------------------------------------------------------------------
+
     def _update_inverses(self):
         """Recompute cached eigen decompositions A = QΛQᵀ, G = QΛQᵀ.
 
@@ -130,6 +199,10 @@ class OlsveredKFAC(torch.optim.Optimizer):
           1. Avoid forming the dense n×n inverse (saves O(n³) flops vs LU inverse).
           2. Clamp near-zero eigenvalues for better stability near singularity.
           3. Change the damping coefficient without re-factorising Q.
+
+        When adaptive=True, each Gram matrix independently gets a rank chosen
+        by _effective_rank(): small matrices use full EVD, large matrices use
+        low-rank EVD with at most adaptive_rank_budget eigenvectors.
 
         The cached (Q_A, inv_λ_A, Q_G, inv_λ_G) tuples are stored as f32 torch
         tensors so the hot apply path never touches numpy after this point.
@@ -142,22 +215,14 @@ class OlsveredKFAC(torch.optim.Optimizer):
             A_np = np.ascontiguousarray(A.cpu().numpy(), dtype=np.float32)
             G_np = np.ascontiguousarray(G.cpu().numpy(), dtype=np.float32)
 
-            if self.rank is not None:
-                k_a = min(self.rank, A_np.shape[0])
-                k_g = min(self.rank, G_np.shape[0])
-                if self.randomized:
-                    # Randomized EVD: O(k·n²) — removes inversion cost disadvantage.
-                    # Default path when rank is set.
-                    Q_A, inv_lam_A = randomized_eigh_f32(A_np, k_a, self.n_power_iter, self.damping)
-                    Q_G, inv_lam_G = randomized_eigh_f32(G_np, k_g, self.n_power_iter, self.damping)
-                else:
-                    # Exact truncated EVD: O(n³) then keep top-k.
-                    Q_A, inv_lam_A = eigh_topk_f32(A_np, k_a, self.damping)
-                    Q_G, inv_lam_G = eigh_topk_f32(G_np, k_g, self.damping)
-            else:
-                # Full eigen basis (n×n matrices)
-                Q_A, inv_lam_A = eigh_f32(A_np, self.damping)
-                Q_G, inv_lam_G = eigh_f32(G_np, self.damping)
+            k_a = self._effective_rank(A_np.shape[0])
+            k_g = self._effective_rank(G_np.shape[0])
+
+            Q_A, inv_lam_A = self._decompose(A_np, k_a)
+            Q_G, inv_lam_G = self._decompose(G_np, k_g)
+
+            # Record choices for external inspection (e.g. print_layer_ranks())
+            self.layer_ranks_[module] = (k_a, k_g)
 
             # Cache as torch tensors; move to target device/dtype once
             self._inverses[module] = (
@@ -262,6 +327,32 @@ class OlsveredKFAC(torch.optim.Optimizer):
 
         return loss
 
+    def print_layer_ranks(self):
+        """Print a summary of the rank chosen for each layer's Gram matrices.
+
+        Useful for verifying adaptive mode selections and estimating the
+        actual compute savings vs full-rank K-FAC.
+
+        Example output (adaptive=True, adaptive_min_n=256, adaptive_rank_budget=64)::
+
+            Layer ranks after _update_inverses:
+              Linear(784→512)  A(784×784): k=64  G(512×512): k=64
+              Linear(512→256)  A(512×512): k=64  G(256×256): k=64
+              Linear(256→128)  A(256×256): k=64  G(128×128): full EVD
+        """
+        if not self.layer_ranks_:
+            print("No layer ranks recorded yet — call step() at least once.")
+            return
+        print("Layer ranks (last _update_inverses call):")
+        for module, (k_a, k_g) in self.layer_ranks_.items():
+            n_a = module.weight.shape[1]  # d_in  → A is n_a × n_a
+            n_g = module.weight.shape[0]  # d_out → G is n_g × n_g
+            ka_str = f"k={k_a}" if k_a is not None else "full"
+            kg_str = f"k={k_g}" if k_g is not None else "full"
+            print(f"  Linear({n_a}→{n_g})"
+                  f"  A({n_a}×{n_a}): {ka_str}"
+                  f"  G({n_g}×{n_g}): {kg_str}")
+
     def get_timing_stats(self) -> Dict[str, Dict[str, float]]:
         """Return timing statistics for profiling."""
         stats = {}
@@ -283,3 +374,4 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self._factors.clear()
         self._inverses.clear()
         self._momentum_buffers.clear()
+        self.layer_ranks_.clear()
