@@ -93,13 +93,14 @@ class OlsveredKFAC(torch.optim.Optimizer):
         adaptive: bool = False,
         adaptive_min_n: int = 256,
         adaptive_rank_budget: int = 64,
+        grad_clip: Optional[float] = None,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
-        # Collect only Linear layer parameters
+        # Collect Linear and Conv2d layer parameters
         params = []
         for module in model.modules():
-            if isinstance(module, nn.Linear):
+            if isinstance(module, (nn.Linear, nn.Conv2d)):
                 params.append({"params": module.parameters()})
         super().__init__(params, defaults)
 
@@ -113,6 +114,7 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.adaptive = adaptive
         self.adaptive_min_n = adaptive_min_n
         self.adaptive_rank_budget = adaptive_rank_budget
+        self.grad_clip = grad_clip  # max L2 norm per natural-gradient matrix (None=off)
 
         # Per-layer rank choices recorded during _update_inverses for inspection.
         # Keys are module objects; values are (k_a, k_g) — None means full EVD.
@@ -215,6 +217,13 @@ class OlsveredKFAC(torch.optim.Optimizer):
             A_np = np.ascontiguousarray(A.cpu().numpy(), dtype=np.float32)
             G_np = np.ascontiguousarray(G.cpu().numpy(), dtype=np.float32)
 
+            # Guard: skip this module if Gram matrices are corrupt (NaN/inf).
+            # This happens when the model has diverged; keep the last valid
+            # cached inverse and let the run continue (it will likely diverge
+            # further, but the benchmark can at least record the trajectory).
+            if (not np.all(np.isfinite(A_np))) or (not np.all(np.isfinite(G_np))):
+                continue
+
             k_a = self._effective_rank(A_np.shape[0])
             k_g = self._effective_rank(G_np.shape[0])
 
@@ -293,14 +302,28 @@ class OlsveredKFAC(torch.optim.Optimizer):
 
             # --- Weight update: ΔW = Q_G d_G Q_Gᵀ ∇W Q_A d_A Q_Aᵀ ---
             if module.weight.grad is not None:
-                grad_w = module.weight.grad  # (d_out, d_in)
+                # Conv2d weight is (C_out, C_in, kH, kW) — flatten to 2D for nat-grad,
+                # then reshape back.  Linear weight is already (d_out, d_in).
+                is_conv = isinstance(module, nn.Conv2d)
+                if is_conv:
+                    grad_w = module.weight.grad.view(module.weight.shape[0], -1)
+                else:
+                    grad_w = module.weight.grad  # (d_out, d_in)
+
                 if wd > 0:
-                    grad_w = grad_w + wd * module.weight.data
+                    grad_w = grad_w + wd * module.weight.data.view_as(grad_w)
 
                 # Apply in eigen basis — 4 matmuls + element-wise scale
                 tmp = Q_G.T @ grad_w @ Q_A                               # rotate in
                 tmp = tmp * (inv_lam_G.unsqueeze(1) * inv_lam_A.unsqueeze(0))  # scale
                 nat_grad = Q_G @ tmp @ Q_A.T                             # rotate out
+
+                # Optional gradient clipping — prevents divergence on early steps
+                # when Gram matrices are rank-deficient (few samples seen so far)
+                if self.grad_clip is not None:
+                    grad_norm = nat_grad.norm()
+                    if grad_norm > self.grad_clip:
+                        nat_grad = nat_grad * (self.grad_clip / grad_norm)
 
                 # Momentum
                 if mom > 0:
@@ -310,6 +333,9 @@ class OlsveredKFAC(torch.optim.Optimizer):
                     buf.mul_(mom).add_(nat_grad)
                     nat_grad = buf
 
+                # Reshape back to original weight shape for Conv2d
+                if is_conv:
+                    nat_grad = nat_grad.view_as(module.weight)
                 module.weight.data.add_(nat_grad, alpha=-lr)
 
             # --- Bias update: Δb = Q_G d_G Q_Gᵀ ∇b ---
@@ -345,11 +371,19 @@ class OlsveredKFAC(torch.optim.Optimizer):
             return
         print("Layer ranks (last _update_inverses call):")
         for module, (k_a, k_g) in self.layer_ranks_.items():
-            n_a = module.weight.shape[1]  # d_in  → A is n_a × n_a
-            n_g = module.weight.shape[0]  # d_out → G is n_g × n_g
+            if isinstance(module, nn.Conv2d):
+                kH, kW = module.kernel_size if isinstance(module.kernel_size, tuple) \
+                          else (module.kernel_size, module.kernel_size)
+                n_a = module.in_channels * kH * kW   # A dim: C_in·kH·kW
+                n_g = module.out_channels             # G dim: C_out
+                label = f"Conv2d({module.in_channels}→{n_g}, k={kH}×{kW})"
+            else:
+                n_a = module.weight.shape[1]
+                n_g = module.weight.shape[0]
+                label = f"Linear({n_a}→{n_g})"
             ka_str = f"k={k_a}" if k_a is not None else "full"
             kg_str = f"k={k_g}" if k_g is not None else "full"
-            print(f"  Linear({n_a}→{n_g})"
+            print(f"  {label}"
                   f"  A({n_a}×{n_a}): {ka_str}"
                   f"  G({n_g}×{n_g}): {kg_str}")
 

@@ -50,6 +50,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         inv_update_freq: int = 10,
         weight_decay: float = 0.0,
         momentum: float = 0.9,
+        grad_clip: Optional[float] = None,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -63,6 +64,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         self.damping = damping
         self.factor_update_freq = factor_update_freq
         self.inv_update_freq = inv_update_freq
+        self.grad_clip = grad_clip
 
         self.hooks = KFACHooks(model)
         self.hooks.enable()
@@ -91,6 +93,12 @@ class ClassicKFAC(torch.optim.Optimizer):
         """Recompute cached inverses using torch.linalg.inv (classical approach)."""
         t0 = time.perf_counter()
         for module, (A, G) in self._factors.items():
+            # Guard: skip corrupt Gram matrices (NaN/inf from diverged model)
+            A_np = A.cpu().numpy()
+            G_np = G.cpu().numpy()
+            if (not np.all(np.isfinite(A_np))) or (not np.all(np.isfinite(G_np))):
+                continue
+
             d_in = A.shape[0]
             d_out = G.shape[0]
 
@@ -158,6 +166,12 @@ class ClassicKFAC(torch.optim.Optimizer):
                     grad_w = grad_w + wd * module.weight.data
 
                 nat_grad = G_inv @ grad_w @ A_inv
+
+                # Clip to prevent divergence on early / rank-deficient steps
+                if self.grad_clip is not None:
+                    grad_norm = nat_grad.norm()
+                    if grad_norm > self.grad_clip:
+                        nat_grad = nat_grad * (self.grad_clip / grad_norm)
 
                 if mom > 0:
                     if module not in self._momentum_buffers:

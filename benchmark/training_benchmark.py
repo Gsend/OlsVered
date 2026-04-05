@@ -45,13 +45,14 @@ SEED = 42
 torch.manual_seed(SEED)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MAX_STEPS    = 500          # hard cap per optimizer
+MAX_STEPS    = 600          # hard cap per optimizer
 TARGET_ACC   = 0.98         # stop early when train accuracy >= this
 BATCH_SIZE   = 64
 KFAC_FREQ    = 10           # K-FAC update frequency (steps)
 LR_ADAM      = 1e-3
-LR_KFAC      = 1e-2         # K-FAC typically uses a larger lr
+LR_KFAC      = 1e-2         # higher than Adam — natural gradient is already curvature-scaled
 DAMPING      = 1e-2
+KFAC_CLIP    = 10.0         # max natural-gradient norm per layer
 RESULTS_DIR  = ROOT / "benchmark" / "results"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -218,6 +219,8 @@ def make_classic_kfac(model):
         damping=DAMPING,
         factor_update_freq=KFAC_FREQ,
         inv_update_freq=KFAC_FREQ,
+        momentum=0.0,           # no momentum — K-FAC curvature scaling is enough
+        grad_clip=KFAC_CLIP,
     )
 
 def make_olsvered_adaptive(model):
@@ -230,6 +233,8 @@ def make_olsvered_adaptive(model):
         adaptive=True,
         adaptive_min_n=128,
         adaptive_rank_budget=64,
+        momentum=0.0,
+        grad_clip=KFAC_CLIP,
     )
 
 def make_olsvered_rank32(model):
@@ -241,6 +246,8 @@ def make_olsvered_rank32(model):
         inv_update_freq=KFAC_FREQ,
         rank=32,
         randomized=True,
+        momentum=0.0,
+        grad_clip=KFAC_CLIP,
     )
 
 
@@ -345,11 +352,11 @@ def main():
     train_loader, val_loader = get_loaders()
 
     configs = [
-        ("Adam",                    make_adam),
-        ("SGD+momentum",            make_sgd),
-        ("ClassicKFAC",             make_classic_kfac),
         ("OlsveredKFAC-adaptive",   make_olsvered_adaptive),
         ("OlsveredKFAC-rank32",     make_olsvered_rank32),
+        ("ClassicKFAC",             make_classic_kfac),
+        ("Adam",                    make_adam),
+        ("SGD+momentum",            make_sgd),
     ]
 
     all_results = []
