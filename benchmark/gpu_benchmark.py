@@ -190,6 +190,8 @@ def run_mlp_benchmark(device, args):
                               momentum=0.0, grad_clip=10.0)
 
         criterion  = nn.CrossEntropyLoss()
+        scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=args.max_steps_mlp, eta_min=cfg['lr'] * 0.01)
         data_iter  = iter(train_loader)
         power_mon  = PowerMonitor()
         reset_memory_stats()
@@ -221,6 +223,7 @@ def run_mlp_benchmark(device, args):
             opt.step()
             t_opt_done = time.perf_counter()
 
+            scheduler.step()
             power_mon.sample()
             fwdbwd_times.append(t_fwd_done - t_fwd)
             opt_times.append(t_opt_done - t_opt)
@@ -326,6 +329,8 @@ def run_bert_benchmark(device, args):
                               factor_update_freq=10, inv_update_freq=10,
                               momentum=0.0, grad_clip=5.0)
 
+        scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=args.max_steps_bert, eta_min=cfg['lr'] * 0.01)
         data_iter = iter(train_loader)
         power_mon = PowerMonitor()
         reset_memory_stats()
@@ -357,6 +362,7 @@ def run_bert_benchmark(device, args):
             opt.step()
             t_opt_done = time.perf_counter()
 
+            scheduler.step()
             power_mon.sample()
             fwdbwd_times.append(t_fwd_done - t_fwd)
             opt_times.append(t_opt_done - t_opt)

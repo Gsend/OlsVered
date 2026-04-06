@@ -106,6 +106,8 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
     model = MLP().to(DEVICE)
     criterion = nn.CrossEntropyLoss()
     opt = make_opt_fn(model)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=MAX_STEPS, eta_min=opt.param_groups[0]['lr'] * 0.01)
 
     is_kfac = hasattr(opt, "hooks")  # both KFAC optimizers have hooks
 
@@ -144,6 +146,7 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
         t_opt = time.perf_counter()
         opt.step()
         opt_ms = (time.perf_counter() - t_opt) * 1000
+        scheduler.step()
 
         step += 1
 
