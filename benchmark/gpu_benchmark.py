@@ -196,7 +196,7 @@ def run_mlp_benchmark(device, args):
     configs = [
         dict(name="Adam",          B=128,  lr=1e-3,  kfac=False),
         dict(name="ClassicKFAC",   B=512,  lr=5e-2,  kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC",  B=512,  lr=1e-1,  kfac=True,  randomised=True),
+        dict(name="OlsveredKFAC",  B=512,  lr=5e-1,  kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
