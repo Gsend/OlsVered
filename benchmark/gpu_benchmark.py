@@ -220,16 +220,16 @@ def run_mlp_benchmark(device, args):
             from optimizer.olsvered_kfac import OlsveredKFAC
             # On GPU: inv_update_freq=10 is fine (EVD is fast).
             # On CPU: increase to 50 to amortise the expensive EVD cost.
-            evd_freq = 10 if torch.cuda.is_available() else 50
+            evd_freq = 20 if torch.cuda.is_available() else 50
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-2,
-                               factor_update_freq=10, inv_update_freq=evd_freq,
+                               factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=64, momentum=0.0,
                                grad_clip=10.0)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-2,
-                              factor_update_freq=10, inv_update_freq=10,
+                              factor_update_freq=20, inv_update_freq=20,
                               momentum=0.0, grad_clip=10.0)
 
         criterion  = nn.CrossEntropyLoss()
