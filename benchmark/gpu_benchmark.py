@@ -77,14 +77,15 @@ def save_result_incremental(result: dict, task: str):
     write_header = not csv_path.exists()
     with open(csv_path, "a") as f:
         if write_header:
-            f.write("task,name,batch_size,lr,steps,samples,wall_s,"
+            f.write("task,name,batch_size,lr_init,lr_final,steps,samples,wall_s,"
                     "avg_fwdbwd_ms,avg_opt_ms,p99_opt_ms,"
                     "peak_mem_gb,avg_power_w,final_val_acc,final_val_loss\n")
         final_acc  = result["curve_val_acc"][-1]  if result["curve_val_acc"]  else ""
         final_loss = result["curve_val_loss"][-1] if result["curve_val_loss"] else ""
-        pwr = result.get("avg_power_w") or ""
+        pwr      = result.get("avg_power_w") or ""
+        lr_final = result.get("lr_final", "")
         f.write(f"{result['task']},{result['name']},{result['B']},{result['lr']},"
-                f"{result['steps']},{result['samples']},{result['wall_s']:.1f},"
+                f"{lr_final},{result['steps']},{result['samples']},{result['wall_s']:.1f},"
                 f"{result['avg_fwdbwd_ms']:.2f},{result['avg_opt_ms']:.2f},"
                 f"{result['p99_opt_ms']:.2f},{result['peak_mem_gb']:.3f},{pwr},"
                 f"{final_acc},{final_loss}\n")
@@ -232,9 +233,18 @@ def run_mlp_benchmark(device, args):
                               momentum=0.0, grad_clip=10.0)
 
         criterion  = nn.CrossEntropyLoss()
-        eta_min_factor = 0.02 if cfg.get('randomised') else 0.01
+        # K-FAC needs faster LR decay than Adam: it converges to a good basin
+        # quickly but needs the LR floor earlier to refine past the plateau.
+        # Use T_max = half the run so cosine reaches eta_min by step ~1500,
+        # then holds there.  Adam uses the full run length for a gentler ramp.
+        if cfg['kfac']:
+            sched_t_max    = max(1, args.max_steps_mlp // 2)
+            eta_min_factor = 0.002   # floor = 0.2 % of initial LR
+        else:
+            sched_t_max    = args.max_steps_mlp
+            eta_min_factor = 0.01
         scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=args.max_steps_mlp, eta_min=cfg['lr'] * eta_min_factor)
+            opt, T_max=sched_t_max, eta_min=cfg['lr'] * eta_min_factor)
         data_iter  = iter(train_loader)
         power_mon  = PowerMonitor()
         reset_memory_stats()
@@ -279,15 +289,17 @@ def run_mlp_benchmark(device, args):
                 curve_times.append(wall); curve_val_acc.append(va)
                 curve_val_loss.append(vl)
                 next_record += record_every_n_samples
+                cur_lr = scheduler.get_last_lr()[0]
                 print(f"     step={step:5d}  samples={samples_seen:7,}  "
                       f"val_acc={va:.4f}  val_loss={vl:.4f}  "
-                      f"wall={wall:.1f}s  "
+                      f"lr={cur_lr:.2e}  wall={wall:.1f}s  "
                       f"opt={np.mean(opt_times[-20:])*1000:.1f}ms")
 
         avg_power = power_mon.stop()
         peak_mem  = gpu_memory_gb()
         result = dict(
             task="mlp", **cfg,
+            lr_final=scheduler.get_last_lr()[0],
             steps=step, samples=samples_seen,
             wall_s=time.perf_counter()-t0,
             avg_fwdbwd_ms=np.mean(fwdbwd_times)*1000,
@@ -378,9 +390,14 @@ def run_bert_benchmark(device, args):
                               factor_update_freq=10, inv_update_freq=10,
                               momentum=0.0, grad_clip=5.0)
 
-        eta_min_factor = 0.02 if cfg.get('randomised') else 0.01
+        if cfg['kfac']:
+            sched_t_max    = max(1, args.max_steps_bert // 2)
+            eta_min_factor = 0.002
+        else:
+            sched_t_max    = args.max_steps_bert
+            eta_min_factor = 0.01
         scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=args.max_steps_bert, eta_min=cfg['lr'] * eta_min_factor)
+            opt, T_max=sched_t_max, eta_min=cfg['lr'] * eta_min_factor)
         data_iter = iter(train_loader)
         power_mon = PowerMonitor()
         reset_memory_stats()
@@ -425,15 +442,17 @@ def run_bert_benchmark(device, args):
                 curve_times.append(wall); curve_val_acc.append(va)
                 curve_val_loss.append(vl)
                 next_record += record_every_n
+                cur_lr = scheduler.get_last_lr()[0]
                 print(f"     step={step:5d}  samples={samples_seen:7,}  "
                       f"val_acc={va:.4f}  val_loss={vl:.4f}  "
-                      f"wall={wall/60:.1f}min  "
+                      f"lr={cur_lr:.2e}  wall={wall/60:.1f}min  "
                       f"opt={np.mean(opt_times[-20:])*1000:.1f}ms")
 
         avg_power = power_mon.stop()
         peak_mem  = gpu_memory_gb()
         result = dict(
             task="bert", **cfg,
+            lr_final=scheduler.get_last_lr()[0],
             steps=step, samples=samples_seen,
             wall_s=time.perf_counter()-t0,
             avg_fwdbwd_ms=np.mean(fwdbwd_times)*1000,
@@ -518,17 +537,17 @@ def print_summary(results):
     print("\n" + "="*80)
     print("  RESULTS SUMMARY")
     print("="*80)
-    print(f"  {'Name':<16}  {'B':>5}  {'Steps':>7}  {'Samples':>9}  "
-          f"{'Wall':>8}  {'FwdBwd ms':>10}  {'Opt ms':>8}  "
-          f"{'Mem GB':>7}  {'Pwr W':>6}")
-    print(f"  {'':─<16}  {'':─<5}  {'':─<7}  {'':─<9}  {'':─<8}  "
-          f"{'':─<10}  {'':─<8}  {'':─<7}  {'':─<6}")
+    print(f"  {'Name':<16}  {'B':>5}  {'lr_init':>8}  {'lr_final':>8}  "
+          f"{'Steps':>7}  {'Samples':>9}  {'Wall':>8}  "
+          f"{'FwdBwd ms':>10}  {'Opt ms':>8}  {'Mem GB':>7}  {'Pwr W':>6}")
+    print(f"  {'':─<16}  {'':─<5}  {'':─<8}  {'':─<8}  {'':─<7}  "
+          f"{'':─<9}  {'':─<8}  {'':─<10}  {'':─<8}  {'':─<7}  {'':─<6}")
     for r in results:
-        wall = f"{r['wall_s']/60:.1f}min" if r['wall_s'] > 120 else f"{r['wall_s']:.0f}s"
-        pwr  = f"{r['avg_power_w']:.0f}" if r.get('avg_power_w') else "N/A"
-        final_acc = r["curve_val_acc"][-1] if r["curve_val_acc"] else 0
-        print(f"  {r['name']:<16}  {r['B']:>5}  {r['steps']:>7,}  "
-              f"{r['samples']:>9,}  {wall:>8}  "
+        wall      = f"{r['wall_s']/60:.1f}min" if r['wall_s'] > 120 else f"{r['wall_s']:.0f}s"
+        pwr       = f"{r['avg_power_w']:.0f}" if r.get('avg_power_w') else "N/A"
+        lr_final  = f"{r['lr_final']:.2e}" if r.get('lr_final') is not None else "N/A"
+        print(f"  {r['name']:<16}  {r['B']:>5}  {r['lr']:>8.2e}  {lr_final:>8}  "
+              f"{r['steps']:>7,}  {r['samples']:>9,}  {wall:>8}  "
               f"{r['avg_fwdbwd_ms']:>10.1f}  {r['avg_opt_ms']:>8.1f}  "
               f"{r['peak_mem_gb']:>7.2f}  {pwr:>6}")
     print(f"\n  Final val accuracy:")

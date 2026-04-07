@@ -106,10 +106,22 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
     model = MLP().to(DEVICE)
     criterion = nn.CrossEntropyLoss()
     opt = make_opt_fn(model)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max=MAX_STEPS, eta_min=opt.param_groups[0]['lr'] * 0.01)
 
     is_kfac = hasattr(opt, "hooks")  # both KFAC optimizers have hooks
+
+    # K-FAC converges to a good basin quickly but needs the LR to drop faster
+    # to refine past the early plateau.  Use T_max = half the run so the cosine
+    # reaches eta_min by ~step 300, then holds there.  Non-K-FAC uses the full
+    # run for a gentler decay.
+    init_lr = opt.param_groups[0]['lr']
+    if is_kfac:
+        sched_t_max    = max(1, MAX_STEPS // 2)
+        eta_min_factor = 0.002   # floor = 0.2 % of initial LR
+    else:
+        sched_t_max    = MAX_STEPS
+        eta_min_factor = 0.01
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=sched_t_max, eta_min=init_lr * eta_min_factor)
 
     history = {
         "name":          name,
@@ -176,9 +188,10 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
             history["val_acc"].append(round(val_acc, 4))
             history["opt_overhead"].append(round(opt_ms, 3))
 
+            cur_lr = scheduler.get_last_lr()[0]
             print(f"  step {step:4d}  loss={loss.item():.4f}  "
                   f"train_acc={train_acc:.3f}  val_acc={val_acc:.3f}  "
-                  f"opt={opt_ms:.1f}ms  wall={wall:.1f}s")
+                  f"lr={cur_lr:.2e}  opt={opt_ms:.1f}ms  wall={wall:.1f}s")
 
             if train_acc >= TARGET_ACC:
                 print(f"  ✓ Reached target {TARGET_ACC:.0%} at step {step}")
@@ -196,6 +209,8 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
     history["steps_to_target"] = steps_to_target
     history["time_to_target"]  = time_to_target
     history["final_val_acc"]   = history["val_acc"][-1] if history["val_acc"] else None
+    history["lr_init"]         = init_lr
+    history["lr_final"]        = scheduler.get_last_lr()[0]
     history["avg_opt_overhead_ms"] = (
         sum(history["opt_overhead"]) / len(history["opt_overhead"])
         if history["opt_overhead"] else None
@@ -309,23 +324,28 @@ def print_summary(all_results):
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"  {'Optimizer':>24}  {'Steps→target':>12}  {'Time→target':>12}  "
+    print(f"  {'Optimizer':>24}  {'lr_init':>8}  {'lr_final':>8}  "
+          f"{'Steps→target':>12}  {'Time→target':>12}  "
           f"{'Final val acc':>14}  {'Opt ms/step':>11}")
-    print(f"  {'-'*75}")
+    print(f"  {'-'*90}")
 
     adam_time = next(
         (r["time_to_target"] for r in all_results if r["name"] == "Adam"), None)
 
     for res in all_results:
-        s = res.get("steps_to_target")
-        t = res.get("time_to_target")
-        v = res.get("final_val_acc")
-        o = res.get("avg_opt_overhead_ms")
+        s  = res.get("steps_to_target")
+        t  = res.get("time_to_target")
+        v  = res.get("final_val_acc")
+        o  = res.get("avg_opt_overhead_ms")
+        li = res.get("lr_init")
+        lf = res.get("lr_final")
 
-        s_str = f"{s}" if s else ">500"
-        t_str = f"{t:.1f}s" if t else "—"
-        v_str = f"{v:.4f}" if v else "—"
-        o_str = f"{o:.1f}" if o else "—"
+        s_str  = f"{s}" if s else ">500"
+        t_str  = f"{t:.1f}s" if t else "—"
+        v_str  = f"{v:.4f}" if v else "—"
+        o_str  = f"{o:.1f}" if o else "—"
+        li_str = f"{li:.2e}" if li is not None else "—"
+        lf_str = f"{lf:.2e}" if lf is not None else "—"
 
         # Speedup vs Adam
         if t and adam_time:
@@ -334,7 +354,8 @@ def print_summary(all_results):
         else:
             ratio_str = ""
 
-        print(f"  {res['name']:>24}  {s_str:>12}  {t_str + ratio_str:>25}  "
+        print(f"  {res['name']:>24}  {li_str:>8}  {lf_str:>8}  "
+              f"{s_str:>12}  {t_str + ratio_str:>25}  "
               f"{v_str:>14}  {o_str:>11}")
 
     print()
