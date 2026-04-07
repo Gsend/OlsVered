@@ -239,7 +239,7 @@ def run_mlp_benchmark(device, args):
         # then holds there.  Adam uses the full run length for a gentler ramp.
         if cfg['kfac']:
             sched_t_max    = max(1, args.max_steps_mlp // 2)
-            eta_min_factor = 0.002   # floor = 0.2 % of initial LR
+            eta_min_factor = 0.004   # floor = 0.2 % of initial LR
         else:
             sched_t_max    = args.max_steps_mlp
             eta_min_factor = 0.01
