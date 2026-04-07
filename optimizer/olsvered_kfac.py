@@ -11,6 +11,7 @@ Instead of torch.linalg.inv, uses olsvered's LU-based solver which:
 """
 
 import time
+from collections import deque
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -135,12 +136,13 @@ class OlsveredKFAC(torch.optim.Optimizer):
         # Step counter
         self._step_count = 0
 
-        # Timing instrumentation
+        # Timing instrumentation — bounded deques prevent unbounded memory growth
+        _maxlen = 1000
         self.timing = {
-            "factor_compute": [],
-            "inversion": [],
-            "precondition": [],
-            "total_step": [],
+            "factor_compute": deque(maxlen=_maxlen),
+            "inversion":      deque(maxlen=_maxlen),
+            "precondition":   deque(maxlen=_maxlen),
+            "total_step":     deque(maxlen=_maxlen),
         }
 
     def _update_factors(self):
@@ -170,75 +172,94 @@ class OlsveredKFAC(torch.optim.Optimizer):
             return min(self.rank, n)
         return None  # full EVD
 
-    def _decompose(self, mat_np: np.ndarray, k: Optional[int]):
-        """Run EVD on a Gram matrix and return (Q, inv_lam) as numpy arrays.
+    def _decompose_torch(
+        self, mat: torch.Tensor, k: Optional[int]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """EVD entirely on the tensor's device (GPU or CPU).
+
+        Replaces the old numpy/Rust path so that on CUDA the decomposition
+        runs via cuSOLVER (torch.linalg.eigh) with zero host–device transfers.
 
         Parameters
         ----------
-        mat_np : (n, n) float32 contiguous array
-        k      : None → full EVD returning Q (n×n); int → low-rank returning Q (n×k)
+        mat : (n, n) symmetric float32 tensor on target device
+        k   : None → full EVD (n×n Q); int → low-rank (n×k Q)
 
         Returns
         -------
-        Q        : (n, n) or (n, k) float32
-        inv_lam  : (n,) or (k,) float32 — 1 / (λ + damping)
+        Q       : (n, n) or (n, k) float32 — eigenvectors as columns
+        inv_lam : (n,)  or (k,)  float32 — 1 / (λ + damping)
         """
-        if k is None:
-            return eigh_f32(mat_np, self.damping)
+        # Ensure symmetry (numerical drift can break eigh)
+        mat = (mat + mat.T) * 0.5
+
+        if k is None or k >= mat.shape[0]:
+            # Full EVD — uses cuSOLVER on CUDA, LAPACK on CPU
+            eigenvalues, Q = torch.linalg.eigh(mat)
+            inv_lam = 1.0 / (eigenvalues + self.damping).clamp(min=1e-8)
+            return Q, inv_lam
+
         if self.randomized:
-            return randomized_eigh_f32(mat_np, k, self.n_power_iter, self.damping)
-        return eigh_topk_f32(mat_np, k, self.damping)
+            # Halko-Martinsson-Tropp randomized EVD — stays on GPU
+            n = mat.shape[0]
+            Omega = torch.randn(n, k, device=mat.device, dtype=mat.dtype)
+            Y = mat @ Omega
+            for _ in range(self.n_power_iter):
+                Y = mat @ (mat @ Y)
+            Q_basis, _ = torch.linalg.qr(Y)          # (n, k) orthonormal
+            B = Q_basis.T @ mat @ Q_basis              # (k, k) small sketch
+            B = (B + B.T) * 0.5
+            eigenvalues, V = torch.linalg.eigh(B)
+            Q = Q_basis @ V                            # (n, k) back to full space
+            inv_lam = 1.0 / (eigenvalues + self.damping).clamp(min=1e-8)
+            return Q, inv_lam
+
+        # Deterministic top-k: full eigh then slice (cheaper than scipy for GPU)
+        eigenvalues, Q_full = torch.linalg.eigh(mat)
+        eigenvalues = eigenvalues[-k:]
+        Q = Q_full[:, -k:]
+        inv_lam = 1.0 / (eigenvalues + self.damping).clamp(min=1e-8)
+        return Q, inv_lam
 
     # ------------------------------------------------------------------
 
     def _update_inverses(self):
         """Recompute cached eigen decompositions A = QΛQᵀ, G = QΛQᵀ.
 
-        Uses faer's SIMD-accelerated self-adjoint EVD (f32 throughout).
+        Runs entirely on the model's device (GPU via cuSOLVER when available).
+        No CPU/numpy roundtrip — tensors stay on-device throughout.
+
         Damping is applied in eigenvalue space: caches 1/(λᵢ + δ) instead of
-        materialising the full inverse matrix.  This lets us:
-
-          1. Avoid forming the dense n×n inverse (saves O(n³) flops vs LU inverse).
-          2. Clamp near-zero eigenvalues for better stability near singularity.
-          3. Change the damping coefficient without re-factorising Q.
-
-        When adaptive=True, each Gram matrix independently gets a rank chosen
-        by _effective_rank(): small matrices use full EVD, large matrices use
-        low-rank EVD with at most adaptive_rank_budget eigenvectors.
-
-        The cached (Q_A, inv_λ_A, Q_G, inv_λ_G) tuples are stored as f32 torch
-        tensors so the hot apply path never touches numpy after this point.
+        materialising the full inverse matrix.
         """
         t0 = time.perf_counter()
         for module, (A, G) in self._factors.items():
             device = module.weight.device
             dtype  = module.weight.dtype
 
-            A_np = np.ascontiguousarray(A.cpu().numpy(), dtype=np.float32)
-            G_np = np.ascontiguousarray(G.cpu().numpy(), dtype=np.float32)
+            # Cast to float32 for numerical stability; keep on device
+            A_f = A.to(dtype=torch.float32)
+            G_f = G.to(dtype=torch.float32)
 
-            # Guard: skip this module if Gram matrices are corrupt (NaN/inf).
-            # This happens when the model has diverged; keep the last valid
-            # cached inverse and let the run continue (it will likely diverge
-            # further, but the benchmark can at least record the trajectory).
-            if (not np.all(np.isfinite(A_np))) or (not np.all(np.isfinite(G_np))):
+            # Guard: skip corrupt Gram matrices (NaN/inf from diverged training)
+            if not (torch.isfinite(A_f).all() and torch.isfinite(G_f).all()):
                 continue
 
-            k_a = self._effective_rank(A_np.shape[0])
-            k_g = self._effective_rank(G_np.shape[0])
+            k_a = self._effective_rank(A_f.shape[0])
+            k_g = self._effective_rank(G_f.shape[0])
 
-            Q_A, inv_lam_A = self._decompose(A_np, k_a)
-            Q_G, inv_lam_G = self._decompose(G_np, k_g)
+            Q_A, inv_lam_A = self._decompose_torch(A_f, k_a)
+            Q_G, inv_lam_G = self._decompose_torch(G_f, k_g)
 
-            # Record choices for external inspection (e.g. print_layer_ranks())
+            # Record for external inspection (e.g. print_layer_ranks())
             self.layer_ranks_[module] = (k_a, k_g)
 
-            # Cache as torch tensors; move to target device/dtype once
+            # Cast back to model dtype and store — apply step uses these directly
             self._inverses[module] = (
-                torch.from_numpy(Q_A).to(device=device, dtype=dtype),
-                torch.from_numpy(inv_lam_A).to(device=device, dtype=dtype),
-                torch.from_numpy(Q_G).to(device=device, dtype=dtype),
-                torch.from_numpy(inv_lam_G).to(device=device, dtype=dtype),
+                Q_A.to(dtype=dtype),
+                inv_lam_A.to(dtype=dtype),
+                Q_G.to(dtype=dtype),
+                inv_lam_G.to(dtype=dtype),
             )
 
         self.timing["inversion"].append(time.perf_counter() - t0)
@@ -285,7 +306,7 @@ class OlsveredKFAC(torch.optim.Optimizer):
                             mom = group["momentum"]
                             break
                     if wd > 0:
-                        grad = grad + wd * p.data
+                        grad = p.grad.add(p.data, alpha=wd)
                     p.data.add_(grad, alpha=-lr)
                 continue
 
@@ -305,13 +326,13 @@ class OlsveredKFAC(torch.optim.Optimizer):
                 # Conv2d weight is (C_out, C_in, kH, kW) — flatten to 2D for nat-grad,
                 # then reshape back.  Linear weight is already (d_out, d_in).
                 is_conv = isinstance(module, nn.Conv2d)
+                raw_grad = module.weight.grad
                 if is_conv:
-                    grad_w = module.weight.grad.view(module.weight.shape[0], -1)
-                else:
-                    grad_w = module.weight.grad  # (d_out, d_in)
-
+                    raw_grad = raw_grad.view(module.weight.shape[0], -1)
                 if wd > 0:
-                    grad_w = grad_w + wd * module.weight.data.view_as(grad_w)
+                    grad_w = raw_grad.add(module.weight.data.view_as(raw_grad), alpha=wd)
+                else:
+                    grad_w = raw_grad
 
                 # Apply in eigen basis — 4 matmuls + element-wise scale
                 tmp = Q_G.T @ grad_w @ Q_A                               # rotate in
@@ -340,9 +361,10 @@ class OlsveredKFAC(torch.optim.Optimizer):
 
             # --- Bias update: Δb = Q_G d_G Q_Gᵀ ∇b ---
             if module.bias is not None and module.bias.grad is not None:
-                grad_b = module.bias.grad  # (d_out,)
                 if wd > 0:
-                    grad_b = grad_b + wd * module.bias.data
+                    grad_b = module.bias.grad.add(module.bias.data, alpha=wd)
+                else:
+                    grad_b = module.bias.grad  # (d_out,)
                 tmp_b = Q_G.T @ grad_b
                 tmp_b = tmp_b * inv_lam_G
                 nat_grad_b = Q_G @ tmp_b

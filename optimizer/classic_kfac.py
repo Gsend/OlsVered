@@ -14,6 +14,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+from collections import deque
 
 from optimizer.hooks import KFACHooks
 
@@ -75,11 +76,13 @@ class ClassicKFAC(torch.optim.Optimizer):
 
         self._step_count = 0
 
+        # Timing instrumentation — bounded deques prevent unbounded memory growth
+        _maxlen = 1000
         self.timing = {
-            "factor_compute": [],
-            "inversion": [],
-            "precondition": [],
-            "total_step": [],
+            "factor_compute": deque(maxlen=_maxlen),
+            "inversion":      deque(maxlen=_maxlen),
+            "precondition":   deque(maxlen=_maxlen),
+            "total_step":     deque(maxlen=_maxlen),
         }
 
     def _update_factors(self):
@@ -94,9 +97,8 @@ class ClassicKFAC(torch.optim.Optimizer):
         t0 = time.perf_counter()
         for module, (A, G) in self._factors.items():
             # Guard: skip corrupt Gram matrices (NaN/inf from diverged model)
-            A_np = A.cpu().numpy()
-            G_np = G.cpu().numpy()
-            if (not np.all(np.isfinite(A_np))) or (not np.all(np.isfinite(G_np))):
+            # Use torch.isfinite — stays on device, no CPU transfer
+            if not (torch.isfinite(A).all() and torch.isfinite(G).all()):
                 continue
 
             d_in = A.shape[0]
@@ -146,7 +148,7 @@ class ClassicKFAC(torch.optim.Optimizer):
                             mom = group["momentum"]
                             break
                     if wd > 0:
-                        grad = grad + wd * p.data
+                        grad = p.grad.add(p.data, alpha=wd)
                     p.data.add_(grad, alpha=-lr)
                 continue
 
@@ -161,9 +163,10 @@ class ClassicKFAC(torch.optim.Optimizer):
 
             # --- Weight update ---
             if module.weight.grad is not None:
-                grad_w = module.weight.grad
                 if wd > 0:
-                    grad_w = grad_w + wd * module.weight.data
+                    grad_w = module.weight.grad.add(module.weight.data, alpha=wd)
+                else:
+                    grad_w = module.weight.grad
 
                 nat_grad = G_inv @ grad_w @ A_inv
 
@@ -184,9 +187,10 @@ class ClassicKFAC(torch.optim.Optimizer):
 
             # --- Bias update ---
             if module.bias is not None and module.bias.grad is not None:
-                grad_b = module.bias.grad
                 if wd > 0:
-                    grad_b = grad_b + wd * module.bias.data
+                    grad_b = module.bias.grad.add(module.bias.data, alpha=wd)
+                else:
+                    grad_b = module.bias.grad
                 nat_grad_b = G_inv @ grad_b
                 module.bias.data.add_(nat_grad_b, alpha=-lr)
 

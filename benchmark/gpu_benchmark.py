@@ -194,8 +194,8 @@ def run_mlp_benchmark(device, args):
 
     configs = [
         dict(name="Adam",          B=128,  lr=1e-3,  kfac=False),
-        dict(name="ClassicKFAC",   B=512,  lr=2e-2,  kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC",  B=512,  lr=2e-2,  kfac=True,  randomised=True),
+        dict(name="ClassicKFAC",   B=512,  lr=5e-2,  kfac=True,  randomised=False),
+        dict(name="OlsveredKFAC",  B=512,  lr=6e-2,  kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -217,8 +217,11 @@ def run_mlp_benchmark(device, args):
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
+            # On GPU: inv_update_freq=10 is fine (EVD is fast).
+            # On CPU: increase to 50 to amortise the expensive EVD cost.
+            evd_freq = 10 if torch.cuda.is_available() else 50
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-2,
-                               factor_update_freq=10, inv_update_freq=10,
+                               factor_update_freq=10, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=64, momentum=0.0,
                                grad_clip=10.0)
@@ -229,8 +232,9 @@ def run_mlp_benchmark(device, args):
                               momentum=0.0, grad_clip=10.0)
 
         criterion  = nn.CrossEntropyLoss()
+        eta_min_factor = 0.02 if cfg.get('randomised') else 0.01
         scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=args.max_steps_mlp, eta_min=cfg['lr'] * 0.01)
+            opt, T_max=args.max_steps_mlp, eta_min=cfg['lr'] * eta_min_factor)
         data_iter  = iter(train_loader)
         power_mon  = PowerMonitor()
         reset_memory_stats()
@@ -337,8 +341,8 @@ def run_bert_benchmark(device, args):
 
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
-        dict(name="ClassicKFAC",  B=512, lr=2e-3, kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC", B=512, lr=2e-3, kfac=True,  randomised=True),
+        dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
+        dict(name="OlsveredKFAC", B=512, lr=6e-3, kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -362,8 +366,9 @@ def run_bert_benchmark(device, args):
                                     weight_decay=0.01)
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
+            evd_freq = 10 if torch.cuda.is_available() else 50
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
-                               factor_update_freq=10, inv_update_freq=10,
+                               factor_update_freq=10, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=64, momentum=0.0,
                                grad_clip=5.0)
@@ -373,8 +378,9 @@ def run_bert_benchmark(device, args):
                               factor_update_freq=10, inv_update_freq=10,
                               momentum=0.0, grad_clip=5.0)
 
+        eta_min_factor = 0.02 if cfg.get('randomised') else 0.01
         scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=args.max_steps_bert, eta_min=cfg['lr'] * 0.01)
+            opt, T_max=args.max_steps_bert, eta_min=cfg['lr'] * eta_min_factor)
         data_iter = iter(train_loader)
         power_mon = PowerMonitor()
         reset_memory_stats()
