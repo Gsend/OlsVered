@@ -196,7 +196,7 @@ def run_mlp_benchmark(device, args):
     configs = [
         dict(name="Adam",          B=128,  lr=1e-3,  kfac=False),
         dict(name="ClassicKFAC",   B=512,  lr=5e-2,  kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC",  B=512,  lr=5e-3,  kfac=True,  randomised=True),
+        dict(name="OlsveredKFAC",  B=512,  lr=1e-2,  kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -239,7 +239,7 @@ def run_mlp_benchmark(device, args):
         # then holds there.  Adam uses the full run length for a gentler ramp.
         if cfg['kfac']:
             sched_t_max    = max(1, args.max_steps_mlp // 2)
-            eta_min_factor = 0.01   # floor = 0.2 % of initial LR
+            eta_min_factor = 0.015   # floor = 0.2 % of initial LR
         else:
             sched_t_max    = args.max_steps_mlp
             eta_min_factor = 0.01
