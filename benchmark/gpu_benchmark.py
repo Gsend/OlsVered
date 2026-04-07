@@ -220,12 +220,12 @@ def run_mlp_benchmark(device, args):
             from optimizer.olsvered_kfac import OlsveredKFAC
             # On GPU: inv_update_freq=10 is fine (EVD is fast).
             # On CPU: increase to 50 to amortise the expensive EVD cost.
-            evd_freq = 3 if torch.cuda.is_available() else 50
+            evd_freq = 5 if torch.cuda.is_available() else 50
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-2,
-                               factor_update_freq=3, inv_update_freq=evd_freq,
+                               factor_update_freq=5, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=64, momentum=0.0,
-                               grad_clip=5.0)
+                               grad_clip=10.0)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-2,
@@ -239,7 +239,7 @@ def run_mlp_benchmark(device, args):
         # then holds there.  Adam uses the full run length for a gentler ramp.
         if cfg['kfac']:
             sched_t_max    = max(1, args.max_steps_mlp // 2)
-            eta_min_factor = 0.004   # floor = 0.2 % of initial LR
+            eta_min_factor = 0.01   # floor = 0.2 % of initial LR
         else:
             sched_t_max    = args.max_steps_mlp
             eta_min_factor = 0.01
