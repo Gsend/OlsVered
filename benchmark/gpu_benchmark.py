@@ -55,6 +55,41 @@ sys.path.insert(0, str(ROOT))
 OUT  = Path(__file__).parent / "results"
 OUT.mkdir(exist_ok=True)
 
+# ─── Serialisation helpers ────────────────────────────────────────────────
+
+def to_serialisable(obj):
+    """Recursively convert numpy types to plain Python for JSON serialisation."""
+    if isinstance(obj, np.floating): return float(obj)
+    if isinstance(obj, np.integer):  return int(obj)
+    if isinstance(obj, list):        return [to_serialisable(x) for x in obj]
+    if isinstance(obj, dict):        return {k: to_serialisable(v) for k,v in obj.items()}
+    return obj
+
+def save_result_incremental(result: dict, task: str):
+    """Save a single optimizer result immediately after it completes."""
+    name_slug = result["name"].lower().replace(" ", "_")
+    # ── JSON (full detail) ──
+    json_path = OUT / f"{task}_{name_slug}_result.json"
+    with open(json_path, "w") as f:
+        json.dump(to_serialisable(result), f, indent=2)
+    # ── CSV (summary row) ──
+    csv_path = OUT / f"{task}_summary.csv"
+    write_header = not csv_path.exists()
+    with open(csv_path, "a") as f:
+        if write_header:
+            f.write("task,name,batch_size,lr,steps,samples,wall_s,"
+                    "avg_fwdbwd_ms,avg_opt_ms,p99_opt_ms,"
+                    "peak_mem_gb,avg_power_w,final_val_acc,final_val_loss\n")
+        final_acc  = result["curve_val_acc"][-1]  if result["curve_val_acc"]  else ""
+        final_loss = result["curve_val_loss"][-1] if result["curve_val_loss"] else ""
+        pwr = result.get("avg_power_w") or ""
+        f.write(f"{result['task']},{result['name']},{result['B']},{result['lr']},"
+                f"{result['steps']},{result['samples']},{result['wall_s']:.1f},"
+                f"{result['avg_fwdbwd_ms']:.2f},{result['avg_opt_ms']:.2f},"
+                f"{result['p99_opt_ms']:.2f},{result['peak_mem_gb']:.3f},{pwr},"
+                f"{final_acc},{final_loss}\n")
+    print(f"  ✓  Saved → {json_path.name}  |  {csv_path.name}")
+
 # ─── GPU utilities ────────────────────────────────────────────────────────
 
 def get_device():
@@ -63,8 +98,8 @@ def get_device():
         print(f"  GPU: {torch.cuda.get_device_name(0)}  "
               f"| VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB")
         return d
-    print("  WARNING: No CUDA GPU found — running on CPU (very slow for BERT)")
-    return torch.device("cpu")
+    print("  ERROR: No CUDA GPU found. Run via run_benchmark.sh for GPU verification.")
+    sys.exit(2)
 
 def gpu_memory_gb():
     if torch.cuda.is_available():
@@ -162,6 +197,10 @@ def run_mlp_benchmark(device, args):
         dict(name="ClassicKFAC",   B=512,  lr=2e-2,  kfac=True,  randomised=False),
         dict(name="OlsveredKFAC",  B=512,  lr=2e-2,  kfac=True,  randomised=True),
     ]
+    configs = [c for c in configs if c["name"].lower() not in args.skip]
+    if not configs:
+        print("  All optimizers skipped — nothing to run for MLP task.")
+        return []
 
     all_results = []
     for cfg in configs:
@@ -257,6 +296,7 @@ def run_mlp_benchmark(device, args):
             curve_val_loss=curve_val_loss,
         )
         all_results.append(result)
+        save_result_incremental(result, "mlp")
         if hasattr(opt,'cleanup'): opt.cleanup()
 
     return all_results
@@ -300,6 +340,10 @@ def run_bert_benchmark(device, args):
         dict(name="ClassicKFAC",  B=512, lr=2e-3, kfac=True,  randomised=False),
         dict(name="OlsveredKFAC", B=512, lr=2e-3, kfac=True,  randomised=True),
     ]
+    configs = [c for c in configs if c["name"].lower() not in args.skip]
+    if not configs:
+        print("  All optimizers skipped — nothing to run for BERT task.")
+        return []
 
     all_results = []
     for cfg in configs:
@@ -396,6 +440,7 @@ def run_bert_benchmark(device, args):
             curve_val_loss=curve_val_loss,
         )
         all_results.append(result)
+        save_result_incremental(result, "bert")
         if hasattr(opt,'cleanup'): opt.cleanup()
 
     return all_results
@@ -512,7 +557,15 @@ def main():
     parser.add_argument("--task", choices=["mlp","bert","all"], default="all")
     parser.add_argument("--max-steps-mlp",  type=int, default=3000)
     parser.add_argument("--max-steps-bert", type=int, default=8000)
+    parser.add_argument(
+        "--skip", default="",
+        help="Comma-separated optimizer names to skip. "
+             "Valid: adam, classickfac, olsveredkfac. "
+             "Example: --skip adam,classickfac"
+    )
     args = parser.parse_args()
+    # Normalise skip list to lowercase set
+    args.skip = {s.strip().lower() for s in args.skip.split(",") if s.strip()}
 
     print("\nOlsveredKFAC GPU Benchmark")
     print("="*70)
@@ -534,18 +587,13 @@ def main():
             print_summary(bert_results)
             make_plots(bert_results, "BERT-base SST-2")
 
-    # Save all results
-    save_path = OUT / "gpu_benchmark_results.json"
-    # Convert numpy types for JSON serialisation
-    def to_serialisable(obj):
-        if isinstance(obj, np.floating): return float(obj)
-        if isinstance(obj, np.integer):  return int(obj)
-        if isinstance(obj, list):        return [to_serialisable(x) for x in obj]
-        if isinstance(obj, dict):        return {k: to_serialisable(v) for k,v in obj.items()}
-        return obj
-    with open(save_path, "w") as f:
-        json.dump(to_serialisable(all_results), f, indent=2)
-    print(f"\n  Full results saved → {save_path}")
+    # Save combined results JSON (all runs together)
+    if all_results:
+        save_path = OUT / "gpu_benchmark_results.json"
+        with open(save_path, "w") as f:
+            json.dump(to_serialisable(all_results), f, indent=2)
+        print(f"\n  Combined results → {save_path}")
+        print(f"  Per-run JSONs and CSV summary → {OUT}/")
 
 if __name__ == "__main__":
     main()
