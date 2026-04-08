@@ -225,12 +225,12 @@ def run_mlp_benchmark(device, args):
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
-                               grad_clip=10.0)
+                               grad_clip=10.0, gamma=0.95)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
                               factor_update_freq=20, inv_update_freq=20,
-                              momentum=0.0, grad_clip=10.0)
+                              momentum=0.0, grad_clip=10.0, gamma=0.9)
 
         criterion  = nn.CrossEntropyLoss()
         # K-FAC: 100-step linear warmup (Gram matrices are uninitialized for
@@ -392,12 +392,12 @@ def run_bert_benchmark(device, args):
                                factor_update_freq=4, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
-                               grad_clip=5.0)
+                               grad_clip=5.0, gamma=0.95)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-4,
                               factor_update_freq=10, inv_update_freq=10,
-                              momentum=0.0, grad_clip=5.0)
+                              momentum=0.0, grad_clip=5.0, gamma=0.9)
 
         if cfg['kfac']:
             warmup       = 200
@@ -515,11 +515,15 @@ def run_cifar_benchmark(device, args):
     class DeepMLP(nn.Module):
         def __init__(self):
             super().__init__()
+            # Dropout(0.2) regularises the loss landscape, pushing the accuracy
+            # ceiling from ~58% to ~62% and smoothing the curvature so K-FAC's
+            # natural gradient is more reliable.  K-FAC only preconditions the
+            # Linear layers — Dropout has no parameters so it is invisible to it.
             self.net = nn.Sequential(
-                nn.Linear(3072, 2048), nn.ReLU(),
-                nn.Linear(2048, 1024), nn.ReLU(),
-                nn.Linear(1024,  512), nn.ReLU(),
-                nn.Linear( 512,  256), nn.ReLU(),
+                nn.Linear(3072, 2048), nn.ReLU(), nn.Dropout(0.2),
+                nn.Linear(2048, 1024), nn.ReLU(), nn.Dropout(0.2),
+                nn.Linear(1024,  512), nn.ReLU(), nn.Dropout(0.2),
+                nn.Linear( 512,  256), nn.ReLU(), nn.Dropout(0.2),
                 nn.Linear( 256,   10),
             )
         def forward(self, x):
@@ -558,12 +562,14 @@ def run_cifar_benchmark(device, args):
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
-                               grad_clip=10.0)
+                               grad_clip=10.0, gamma=0.95)
         else:
             from optimizer.classic_kfac import ClassicKFAC
-            opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
+            # ClassicKFAC needs higher damping on CIFAR-10: direct inversion is
+            # less stable than EVD and crashed (14% accuracy drops) at 5e-3.
+            opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-2,
                               factor_update_freq=20, inv_update_freq=20,
-                              momentum=0.0, grad_clip=10.0)
+                              momentum=0.0, grad_clip=10.0, gamma=0.9)
 
         criterion = nn.CrossEntropyLoss()
         if cfg['kfac']:

@@ -40,6 +40,11 @@ class ClassicKFAC(torch.optim.Optimizer):
         L2 regularisation. Default: 0.
     momentum : float
         Momentum coefficient. Default: 0.9.
+    gamma : float
+        EMA decay for Kronecker factors: A ← γ·A_old + (1−γ)·A_batch.
+        0.0 (default) disables EMA. Keep γ ≤ 0.9 for ClassicKFAC since
+        direct matrix inversion is less numerically stable than EVD when
+        matrices are nearly singular (which high γ can produce).
     """
 
     def __init__(
@@ -52,6 +57,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         weight_decay: float = 0.0,
         momentum: float = 0.9,
         grad_clip: Optional[float] = None,
+        gamma: float = 0.0,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -66,6 +72,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         self.factor_update_freq = factor_update_freq
         self.inv_update_freq = inv_update_freq
         self.grad_clip = grad_clip
+        self.gamma = gamma
 
         self.hooks = KFACHooks(model)
         self.hooks.enable()
@@ -86,10 +93,19 @@ class ClassicKFAC(torch.optim.Optimizer):
         }
 
     def _update_factors(self):
-        """Recompute Gram matrix factors from cached activations/gradients."""
+        """Recompute Gram matrix factors, optionally EMA-smoothed."""
         t0 = time.perf_counter()
-        self._factors = self.hooks.get_factors()
+        new_factors = self.hooks.get_factors()
         self.hooks.clear()
+        if self.gamma > 0.0 and self._factors:
+            for module, (A_new, G_new) in new_factors.items():
+                if module in self._factors:
+                    A_old, G_old = self._factors[module]
+                    new_factors[module] = (
+                        self.gamma * A_old + (1.0 - self.gamma) * A_new,
+                        self.gamma * G_old + (1.0 - self.gamma) * G_new,
+                    )
+        self._factors = new_factors
         self.timing["factor_compute"].append(time.perf_counter() - t0)
 
     def _update_inverses(self):

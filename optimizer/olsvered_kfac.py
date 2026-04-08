@@ -77,6 +77,13 @@ class OlsveredKFAC(torch.optim.Optimizer):
         Should match roughly the batch size used for training (the effective
         rank of a Gram matrix from a batch of B samples is at most B).
         Default: 64.
+    gamma : float
+        EMA decay for Kronecker factors: A ← γ·A_old + (1−γ)·A_batch.
+        0.0 (default) disables EMA — factors are replaced each update.
+        Higher γ smooths out per-batch noise at the cost of slower adaptation.
+        OlsveredKFAC can safely use γ=0.95 because its EVD handles the
+        near-singular matrices that aggressive smoothing can produce; ClassicKFAC
+        should use a lower γ (≤0.9) since direct inversion is less stable.
     """
 
     def __init__(
@@ -95,6 +102,7 @@ class OlsveredKFAC(torch.optim.Optimizer):
         adaptive_min_n: int = 256,
         adaptive_rank_budget: int = 64,
         grad_clip: Optional[float] = None,
+        gamma: float = 0.0,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -116,6 +124,7 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.adaptive_min_n = adaptive_min_n
         self.adaptive_rank_budget = adaptive_rank_budget
         self.grad_clip = grad_clip  # max L2 norm per natural-gradient matrix (None=off)
+        self.gamma = gamma          # EMA decay for Gram matrices (0 = disabled)
 
         # Per-layer rank choices recorded during _update_inverses for inspection.
         # Keys are module objects; values are (k_a, k_g) — None means full EVD.
@@ -146,10 +155,25 @@ class OlsveredKFAC(torch.optim.Optimizer):
         }
 
     def _update_factors(self):
-        """Recompute Gram matrix factors A, G from cached activations/gradients."""
+        """Recompute Gram matrix factors A, G, optionally EMA-smoothed.
+
+        When gamma > 0, each new batch estimate is blended with the running
+        average:  A ← γ·A_old + (1−γ)·A_batch.  This smooths per-batch noise
+        at the cost of slower adaptation — critical on harder tasks (CIFAR-10,
+        BERT) where single-batch Gram matrices are too noisy to precondition well.
+        """
         t0 = time.perf_counter()
-        self._factors = self.hooks.get_factors()
+        new_factors = self.hooks.get_factors()
         self.hooks.clear()
+        if self.gamma > 0.0 and self._factors:
+            for module, (A_new, G_new) in new_factors.items():
+                if module in self._factors:
+                    A_old, G_old = self._factors[module]
+                    new_factors[module] = (
+                        self.gamma * A_old + (1.0 - self.gamma) * A_new,
+                        self.gamma * G_old + (1.0 - self.gamma) * G_new,
+                    )
+        self._factors = new_factors
         self.timing["factor_compute"].append(time.perf_counter() - t0)
 
     # ------------------------------------------------------------------
