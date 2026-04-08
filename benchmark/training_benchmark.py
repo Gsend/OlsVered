@@ -109,19 +109,24 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
 
     is_kfac = hasattr(opt, "hooks")  # both KFAC optimizers have hooks
 
-    # K-FAC converges to a good basin quickly but needs the LR to drop faster
-    # to refine past the early plateau.  Use T_max = half the run so the cosine
-    # reaches eta_min by ~step 300, then holds there.  Non-K-FAC uses the full
-    # run for a gentler decay.
+    # K-FAC: short linear warmup then monotonic cosine to 0.2% of lr.
+    # Warmup avoids large steps before Gram matrices are populated.
+    # T_max MUST equal the number of cosine phase steps — setting it shorter
+    # causes LR to bounce back to lr_init at 2*T_max (V-shape anti-pattern).
+    # Adam: plain cosine over the full run.
     init_lr = opt.param_groups[0]['lr']
     if is_kfac:
-        sched_t_max    = max(1, MAX_STEPS // 2)
-        eta_min_factor = 0.002   # floor = 0.2 % of initial LR
+        warmup       = 50
+        cosine_steps = max(1, MAX_STEPS - warmup)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[
+            torch.optim.lr_scheduler.LinearLR(
+                opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+            torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=cosine_steps, eta_min=init_lr * 0.002),
+        ], milestones=[warmup])
     else:
-        sched_t_max    = MAX_STEPS
-        eta_min_factor = 0.01
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max=sched_t_max, eta_min=init_lr * eta_min_factor)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=MAX_STEPS, eta_min=init_lr * 0.01)
 
     history = {
         "name":          name,
@@ -234,10 +239,10 @@ def make_classic_kfac(model):
     return ClassicKFAC(
         model,
         lr=LR_KFAC,
-        damping=DAMPING,
+        damping=5e-3,           # lower damping → more faithful natural gradient
         factor_update_freq=KFAC_FREQ,
         inv_update_freq=KFAC_FREQ,
-        momentum=0.0,           # no momentum — K-FAC curvature scaling is enough
+        momentum=0.0,
         grad_clip=KFAC_CLIP,
     )
 
@@ -245,12 +250,12 @@ def make_olsvered_adaptive(model):
     return OlsveredKFAC(
         model,
         lr=LR_KFAC,
-        damping=DAMPING,
+        damping=5e-3,
         factor_update_freq=KFAC_FREQ,
         inv_update_freq=KFAC_FREQ,
         adaptive=True,
         adaptive_min_n=128,
-        adaptive_rank_budget=64,
+        adaptive_rank_budget=128,  # B=64 → rank up to 64; 128 covers it fully
         momentum=0.0,
         grad_clip=KFAC_CLIP,
     )

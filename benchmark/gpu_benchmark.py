@@ -221,30 +221,39 @@ def run_mlp_benchmark(device, args):
             # On GPU: inv_update_freq=10 is fine (EVD is fast).
             # On CPU: increase to 50 to amortise the expensive EVD cost.
             evd_freq = 20 if torch.cuda.is_available() else 50
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-2,
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-3,
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
-                               adaptive_rank_budget=64, momentum=0.0,
+                               adaptive_rank_budget=256, momentum=0.0,
                                grad_clip=10.0)
         else:
             from optimizer.classic_kfac import ClassicKFAC
-            opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-2,
+            opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
                               factor_update_freq=20, inv_update_freq=20,
                               momentum=0.0, grad_clip=10.0)
 
         criterion  = nn.CrossEntropyLoss()
-        # K-FAC needs faster LR decay than Adam: it converges to a good basin
-        # quickly but needs the LR floor earlier to refine past the plateau.
-        # Use T_max = half the run so cosine reaches eta_min by step ~1500,
-        # then holds there.  Adam uses the full run length for a gentler ramp.
+        # K-FAC: 100-step linear warmup (Gram matrices are uninitialized for
+        # the first factor_update_freq steps so early nat-grad steps are
+        # unreliable), then monotonic cosine decay over the remaining steps
+        # down to 0.2 % of lr.
+        # Adam: plain cosine over the full run — no warmup needed.
+        # IMPORTANT: T_max must equal the number of scheduler.step() calls in
+        # the cosine phase.  Using T_max < total_steps would create a V-shape
+        # where LR bounces back to lr_init at 2*T_max.
         if cfg['kfac']:
-            sched_t_max    = max(1, args.max_steps_mlp // 2)
-            eta_min_factor = 0.015   # floor = 0.2 % of initial LR
+            warmup      = 100
+            cosine_steps = max(1, args.max_steps_mlp - warmup)
+            eta_min      = cfg['lr'] * 0.002
+            scheduler = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[
+                torch.optim.lr_scheduler.LinearLR(
+                    opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=cosine_steps, eta_min=eta_min),
+            ], milestones=[warmup])
         else:
-            sched_t_max    = args.max_steps_mlp
-            eta_min_factor = 0.01
-        scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=sched_t_max, eta_min=cfg['lr'] * eta_min_factor)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=args.max_steps_mlp, eta_min=cfg['lr'] * 0.01)
         data_iter  = iter(train_loader)
         power_mon  = PowerMonitor()
         reset_memory_stats()
@@ -379,25 +388,30 @@ def run_bert_benchmark(device, args):
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 5 if torch.cuda.is_available() else 50
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-4,
                                factor_update_freq=4, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
-                               adaptive_rank_budget=64, momentum=0.0,
+                               adaptive_rank_budget=256, momentum=0.0,
                                grad_clip=5.0)
         else:
             from optimizer.classic_kfac import ClassicKFAC
-            opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
+            opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-4,
                               factor_update_freq=10, inv_update_freq=10,
                               momentum=0.0, grad_clip=5.0)
 
         if cfg['kfac']:
-            sched_t_max    = max(1, args.max_steps_bert // 2)
-            eta_min_factor = 0.002
+            warmup       = 200
+            cosine_steps = max(1, args.max_steps_bert - warmup)
+            eta_min      = cfg['lr'] * 0.002
+            scheduler = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[
+                torch.optim.lr_scheduler.LinearLR(
+                    opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=cosine_steps, eta_min=eta_min),
+            ], milestones=[warmup])
         else:
-            sched_t_max    = args.max_steps_bert
-            eta_min_factor = 0.01
-        scheduler  = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=sched_t_max, eta_min=cfg['lr'] * eta_min_factor)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=args.max_steps_bert, eta_min=cfg['lr'] * 0.01)
         data_iter = iter(train_loader)
         power_mon = PowerMonitor()
         reset_memory_stats()
@@ -467,6 +481,172 @@ def run_bert_benchmark(device, args):
         all_results.append(result)
         save_result_incremental(result, "bert")
         if hasattr(opt,'cleanup'): opt.cleanup()
+
+    return all_results
+
+# ─── TASK 3: CIFAR-10 MLP ─────────────────────────────────────────────────
+#
+# Why CIFAR-10?  MNIST is too easy — Adam saturates at ~98.7% within the
+# first few hundred steps, leaving no room for K-FAC to show its advantage.
+# CIFAR-10 with a plain MLP tops out around 55-58% for Adam; the loss
+# landscape is poorly conditioned and has high curvature, which is exactly
+# where K-FAC's natural gradient outperforms first-order methods.
+#
+# Architecture: 3072 → 2048 → 1024 → 512 → 256 → 10
+# All Linear layers → full K-FAC coverage, no Conv layers to complicate things.
+
+def run_cifar_benchmark(device, args):
+    print("\n" + "="*70)
+    print("  TASK 3: CIFAR-10 MLP  (3072 → 2048 → 1024 → 512 → 256 → 10)")
+    print("="*70)
+
+    from torchvision import datasets, transforms
+    from torch.utils.data import DataLoader
+
+    tf = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465),
+                             (0.2470, 0.2435, 0.2616)),
+    ])
+    val_loader = DataLoader(
+        datasets.CIFAR10(ROOT/"data", train=False, download=True, transform=tf),
+        batch_size=1024, shuffle=False, num_workers=2, pin_memory=True)
+
+    class DeepMLP(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(3072, 2048), nn.ReLU(),
+                nn.Linear(2048, 1024), nn.ReLU(),
+                nn.Linear(1024,  512), nn.ReLU(),
+                nn.Linear( 512,  256), nn.ReLU(),
+                nn.Linear( 256,   10),
+            )
+        def forward(self, x):
+            return self.net(x.view(x.size(0), -1))
+
+    # K-FAC shines here: lower lr than MNIST (harder task), same damping/rank
+    # improvements from the MLP task.  Adam uses a slightly lower lr too since
+    # CIFAR-10 is noisier.
+    configs = [
+        dict(name="Adam",         B=128, lr=3e-4, kfac=False),
+        dict(name="ClassicKFAC",  B=512, lr=3e-2, kfac=True, randomised=False),
+        dict(name="OlsveredKFAC", B=512, lr=3e-2, kfac=True, randomised=True),
+    ]
+    configs = [c for c in configs if c["name"].lower() not in args.skip]
+    if not configs:
+        print("  All optimizers skipped — nothing to run for CIFAR task.")
+        return []
+
+    all_results = []
+    for cfg in configs:
+        print(f"\n  ── {cfg['name']}  (B={cfg['B']}, lr={cfg['lr']}) ──")
+        torch.manual_seed(42)
+        model = DeepMLP().to(device)
+        print(f"     Parameters: {count_params(model):,}")
+
+        train_ds = datasets.CIFAR10(ROOT/"data", train=True, download=False, transform=tf)
+        train_loader = DataLoader(train_ds, batch_size=cfg['B'], shuffle=True,
+                                  num_workers=2, pin_memory=True)
+
+        if not cfg['kfac']:
+            opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
+        elif cfg['randomised']:
+            from optimizer.olsvered_kfac import OlsveredKFAC
+            evd_freq = 20 if torch.cuda.is_available() else 50
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-3,
+                               factor_update_freq=20, inv_update_freq=evd_freq,
+                               adaptive=True, adaptive_min_n=256,
+                               adaptive_rank_budget=256, momentum=0.0,
+                               grad_clip=10.0)
+        else:
+            from optimizer.classic_kfac import ClassicKFAC
+            opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
+                              factor_update_freq=20, inv_update_freq=20,
+                              momentum=0.0, grad_clip=10.0)
+
+        criterion = nn.CrossEntropyLoss()
+        if cfg['kfac']:
+            warmup       = 100
+            cosine_steps = max(1, args.max_steps_cifar - warmup)
+            eta_min      = cfg['lr'] * 0.002
+            scheduler = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[
+                torch.optim.lr_scheduler.LinearLR(
+                    opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=cosine_steps, eta_min=eta_min),
+            ], milestones=[warmup])
+        else:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=args.max_steps_cifar, eta_min=cfg['lr'] * 0.01)
+
+        data_iter = iter(train_loader)
+        power_mon = PowerMonitor()
+        reset_memory_stats()
+        power_mon.start()
+
+        t0 = time.perf_counter()
+        step = samples_seen = 0
+        opt_times = []; fwdbwd_times = []
+        record_every_n_samples = 5_000
+        next_record = record_every_n_samples
+        curve_steps=[]; curve_samples=[]; curve_times=[]
+        curve_val_acc=[]; curve_val_loss=[]
+
+        while step < args.max_steps_cifar:
+            try: x, y = next(data_iter)
+            except StopIteration:
+                data_iter = iter(train_loader); x, y = next(data_iter)
+            x, y = x.to(device), y.to(device)
+
+            t_fwd = time.perf_counter()
+            model.train(); logits = model(x)
+            loss = criterion(logits, y)
+            opt.zero_grad(); loss.backward()
+            t_fwd_done = time.perf_counter()
+
+            t_opt = time.perf_counter()
+            opt.step()
+            t_opt_done = time.perf_counter()
+
+            scheduler.step()
+            power_mon.sample()
+            fwdbwd_times.append(t_fwd_done - t_fwd)
+            opt_times.append(t_opt_done - t_opt)
+            step += 1; samples_seen += x.size(0)
+
+            if samples_seen >= next_record:
+                va, vl = evaluate(model, val_loader, device, max_batches=20)
+                wall = time.perf_counter() - t0
+                curve_steps.append(step); curve_samples.append(samples_seen)
+                curve_times.append(wall); curve_val_acc.append(va)
+                curve_val_loss.append(vl)
+                next_record += record_every_n_samples
+                cur_lr = scheduler.get_last_lr()[0]
+                print(f"     step={step:5d}  samples={samples_seen:7,}  "
+                      f"val_acc={va:.4f}  val_loss={vl:.4f}  "
+                      f"lr={cur_lr:.2e}  wall={wall:.1f}s  "
+                      f"opt={np.mean(opt_times[-20:])*1000:.1f}ms")
+
+        avg_power = power_mon.stop()
+        peak_mem  = gpu_memory_gb()
+        result = dict(
+            task="cifar", **cfg,
+            lr_final=scheduler.get_last_lr()[0],
+            steps=step, samples=samples_seen,
+            wall_s=time.perf_counter()-t0,
+            avg_fwdbwd_ms=np.mean(fwdbwd_times)*1000,
+            avg_opt_ms=np.mean(opt_times)*1000,
+            p99_opt_ms=np.percentile(opt_times,99)*1000,
+            peak_mem_gb=peak_mem,
+            avg_power_w=avg_power,
+            curve_steps=curve_steps, curve_samples=curve_samples,
+            curve_times=curve_times, curve_val_acc=curve_val_acc,
+            curve_val_loss=curve_val_loss,
+        )
+        all_results.append(result)
+        save_result_incremental(result, "cifar")
+        if hasattr(opt, 'cleanup'): opt.cleanup()
 
     return all_results
 
@@ -579,9 +759,10 @@ def print_summary(results):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", choices=["mlp","bert","all"], default="all")
-    parser.add_argument("--max-steps-mlp",  type=int, default=3000)
-    parser.add_argument("--max-steps-bert", type=int, default=8000)
+    parser.add_argument("--task", choices=["mlp","bert","cifar","all"], default="all")
+    parser.add_argument("--max-steps-mlp",   type=int, default=3000)
+    parser.add_argument("--max-steps-bert",  type=int, default=8000)
+    parser.add_argument("--max-steps-cifar", type=int, default=5000)
     parser.add_argument(
         "--skip", default="",
         help="Comma-separated optimizer names to skip. "
@@ -604,6 +785,13 @@ def main():
         if mlp_results:
             print_summary(mlp_results)
             make_plots(mlp_results, "Large MLP")
+
+    if args.task in ("cifar","all"):
+        cifar_results = run_cifar_benchmark(device, args)
+        all_results.extend(cifar_results)
+        if cifar_results:
+            print_summary(cifar_results)
+            make_plots(cifar_results, "CIFAR-10 MLP")
 
     if args.task in ("bert","all"):
         bert_results = run_bert_benchmark(device, args)
