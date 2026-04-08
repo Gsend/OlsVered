@@ -104,7 +104,6 @@ class OlsveredKFAC(torch.optim.Optimizer):
         grad_clip: Optional[float] = None,
         gamma: float = 0.0,
     ):
-        raise ValueError(f'factor_update_freq, {factor_update_freq}inv_update_freq: {inv_update_freq}')
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
         # Collect Linear and Conv2d layer parameters
