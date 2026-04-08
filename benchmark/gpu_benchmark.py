@@ -534,8 +534,8 @@ def run_cifar_benchmark(device, args):
     # CIFAR-10 is noisier.
     configs = [
         dict(name="Adam",         B=128, lr=3e-4, kfac=False),
-        dict(name="ClassicKFAC",  B=256, lr=3e-2, kfac=True, randomised=False),
-        dict(name="OlsveredKFAC", B=256, lr=2e-2, kfac=True, randomised=True),
+        dict(name="ClassicKFAC",  B=768, lr=3e-2, kfac=True, randomised=False),
+        dict(name="OlsveredKFAC", B=768, lr=2e-2, kfac=True, randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
