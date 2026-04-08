@@ -7,11 +7,12 @@
 #    bash run_benchmark.sh [options]
 #
 #  Options:
-#    --task      mlp|bert|all          (default: mlp)
-#    --skip      adam,classickfac,...  Comma-separated optimizers to skip
-#                Valid names: adam, classickfac, olsveredkfac
-#    --steps-mlp N                     Max steps for MLP task  (default: 3000)
-#    --steps-bert N                    Max steps for BERT task (default: 8000)
+#    --task        mlp|bert|cifar|all      (default: mlp)
+#    --skip        adam,classickfac,...    Comma-separated optimizers to skip
+#                  Valid names: adam, classickfac, olsveredkfac
+#    --steps-mlp   N                      Max steps for MLP task   (default: 3000)
+#    --steps-bert  N                      Max steps for BERT task  (default: 8000)
+#    --steps-cifar N                      Max steps for CIFAR task (default: 5000)
 #    --no-tmux                         Run directly, without tmux session
 #    --session   NAME                  tmux session name (default: benchmark)
 #    --help                            Show this help
@@ -33,6 +34,7 @@ TASK="mlp"
 SKIP=""
 STEPS_MLP=3000
 STEPS_BERT=8000
+STEPS_CIFAR=5000
 USE_TMUX=true
 SESSION="benchmark"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,8 +50,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --task)       TASK="$2";       shift 2 ;;
         --skip)       SKIP="$2";       shift 2 ;;
-        --steps-mlp)  STEPS_MLP="$2";  shift 2 ;;
-        --steps-bert) STEPS_BERT="$2"; shift 2 ;;
+        --steps-mlp)   STEPS_MLP="$2";   shift 2 ;;
+        --steps-bert)  STEPS_BERT="$2";  shift 2 ;;
+        --steps-cifar) STEPS_CIFAR="$2"; shift 2 ;;
         --no-tmux)    USE_TMUX=false;  shift   ;;
         --session)    SESSION="$2";    shift 2 ;;
         --help|-h)
@@ -63,8 +66,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate --task
-if [[ ! "$TASK" =~ ^(mlp|bert|all)$ ]]; then
-    error "--task must be mlp, bert, or all (got: $TASK)"
+if [[ ! "$TASK" =~ ^(mlp|bert|cifar|all)$ ]]; then
+    error "--task must be mlp, bert, cifar, or all (got: $TASK)"
     exit 1
 fi
 
@@ -131,6 +134,7 @@ PY_CMD="cd '${SCRIPT_DIR}' && python3 benchmark/gpu_benchmark.py"
 PY_CMD+=" --task ${TASK}"
 PY_CMD+=" --max-steps-mlp ${STEPS_MLP}"
 PY_CMD+=" --max-steps-bert ${STEPS_BERT}"
+PY_CMD+=" --max-steps-cifar ${STEPS_CIFAR}"
 [[ -n "$SKIP" ]] && PY_CMD+=" --skip ${SKIP}"
 
 info "Command: ${PY_CMD}"
