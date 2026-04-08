@@ -225,7 +225,7 @@ def run_mlp_benchmark(device, args):
                                factor_update_freq=10, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
-                               grad_clip=10.0, gamma=0.97)
+                               grad_clip=10.0, gamma=0.99)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
