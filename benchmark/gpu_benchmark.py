@@ -565,7 +565,7 @@ def run_cifar_benchmark(device, args):
                                factor_update_freq=5, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
-                               grad_clip=20.0, gamma=0.999)
+                               grad_clip=20.0, gamma=0.99)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             # ClassicKFAC needs higher damping on CIFAR-10: direct inversion is
