@@ -35,8 +35,18 @@ with the number of accumulation steps.
 """
 
 from typing import Dict, List, Tuple, Optional
+import warnings
 import torch
 import torch.nn as nn
+
+# PyTorch emits this UserWarning every backward pass for layers whose *input*
+# doesn't require grad (e.g. the first layer, which receives raw data).
+# The hook still fires correctly — the warning is pure noise in K-FAC use.
+warnings.filterwarnings(
+    "ignore",
+    message="Full backward hook is firing",
+    category=UserWarning,
+)
 import torch.nn.functional as F
 
 

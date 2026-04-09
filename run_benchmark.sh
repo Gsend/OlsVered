@@ -8,18 +8,27 @@
 #
 #  Options:
 #    --task          mlp|bert|cifar|scaling|all  (default: mlp)
+#                      mlp     — Large MLP on MNIST (~30 min)
+#                      cifar   — Deep MLP on CIFAR-10 (~20 min)
+#                      scaling — Width sweep: step-cost + convergence quality (~5-10 min)
+#                      bert    — BERT fine-tuning on SST-2 (~4-6 hrs, needs ≥12GB VRAM)
+#                      all     — Run all tasks in sequence
 #    --skip          adam,classickfac,...    Comma-separated optimizers to skip
 #                    Valid names: adam, classickfac, olsveredkfac
-#    --steps-mlp     N                      Max steps for MLP task     (default: 3000)
-#    --steps-bert    N                      Max steps for BERT task    (default: 8000)
-#    --steps-cifar   N                      Max steps for CIFAR task   (default: 5000)
-#    --steps-scaling N                      Conv steps per width in scaling task (default: 300)
+#    --steps-mlp     N                      Max steps for MLP task              (default: 3000)
+#    --steps-bert    N                      Max steps for BERT task             (default: 8000)
+#    --steps-cifar   N                      Max steps for CIFAR task            (default: 5000)
+#    --steps-scaling N                      Convergence steps per width/optimizer in
+#                                           scaling task                        (default: 300)
 #    --no-tmux                         Run directly, without tmux session
 #    --session   NAME                  tmux session name (default: benchmark)
 #    --help                            Show this help
 #
 #  Examples:
 #    bash run_benchmark.sh --task mlp
+#    bash run_benchmark.sh --task cifar
+#    bash run_benchmark.sh --task scaling
+#    bash run_benchmark.sh --task scaling --steps-scaling 500
 #    bash run_benchmark.sh --task mlp --skip adam
 #    bash run_benchmark.sh --task all --skip adam,classickfac
 #    bash run_benchmark.sh --task mlp --steps-mlp 1000 --no-tmux
