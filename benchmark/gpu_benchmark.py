@@ -538,7 +538,7 @@ def run_cifar_benchmark(device, args):
     configs = [
         dict(name="Adam",         B=128,  lr=3e-4, kfac=False),
         dict(name="ClassicKFAC",  B=512,  lr=3e-2, kfac=True, randomised=False),
-        dict(name="OlsveredKFAC", B=1024, lr=3e-2, kfac=True, randomised=True),
+        dict(name="OlsveredKFAC", B=1024, lr=6e-2, kfac=True, randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -560,8 +560,8 @@ def run_cifar_benchmark(device, args):
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
-            evd_freq = 5 if torch.cuda.is_available() else 50
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=2e-3,
+            evd_freq = 10 if torch.cuda.is_available() else 50
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=3e-3,
                                factor_update_freq=5, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
