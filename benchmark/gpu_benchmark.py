@@ -561,7 +561,7 @@ def run_cifar_benchmark(device, args):
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 10 if torch.cuda.is_available() else 50
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-3,
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
                                factor_update_freq=10, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
@@ -578,7 +578,7 @@ def run_cifar_benchmark(device, args):
         if cfg['kfac']:
             warmup       = 100
             cosine_steps = max(1, args.max_steps_cifar - warmup)
-            eta_min      = cfg['lr'] * 0.002
+            eta_min      = cfg['lr'] * 0.001
             scheduler = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[
                 torch.optim.lr_scheduler.LinearLR(
                     opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
