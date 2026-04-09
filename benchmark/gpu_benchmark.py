@@ -659,6 +659,259 @@ def run_cifar_benchmark(device, args):
 
     return all_results
 
+# ─── Scaling Benchmark ────────────────────────────────────────────────────
+
+def run_scaling_benchmark(device, args):
+    """
+    Sweeps hidden-layer width to show two things:
+
+      1. Step-cost scaling:
+           Adam         O(n)     — element-wise, always cheapest per step
+           OlsveredKFAC O(n·r²)  — randomised EVD, grows slowly
+           ClassicKFAC  O(n³)    — direct inversion, explodes at large n
+
+      2. Convergence quality (fixed sample budget):
+           K-FAC uses curvature info → reaches higher accuracy in the same
+           number of steps vs Adam.  Combined with panel 1, the third panel
+           ("accuracy per ms of optimizer overhead") shows the crossover where
+           OlsveredKFAC beats Adam on effective throughput.
+
+    Model:  Linear(width, width) → ReLU → Linear(width, 10)
+    Data:   Gaussian synthetic — 10-class linear-separable problem
+            (avoids dataset loading; convergence comparison is still valid
+             because the curvature advantage is architectural, not data-specific)
+    """
+    # ── Widths to sweep ────────────────────────────────────────────────
+    widths = [256, 512, 1024, 2048]
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        if vram_gb >= 12: widths.append(4096)
+        if vram_gb >= 24: widths.append(8192)
+
+    WARMUP_STEPS = 50
+    TIMING_STEPS = 100   # pure timing, no convergence value
+    CONV_STEPS   = getattr(args, 'max_steps_scaling', 300)
+    BATCH        = 256   # fixed across all widths for fair comparison
+    VAL_SIZE     = 2000
+
+    timing_results = []  # list of {width, name, avg_ms, p50_ms, p99_ms}
+    conv_results   = []  # list of {width, name, final_acc, final_loss, avg_opt_ms}
+
+    print(f"\n  Widths: {widths}   CONV_STEPS={CONV_STEPS}  BATCH={BATCH}")
+
+    for width in widths:
+        print(f"\n  ── width={width} {'─'*35}")
+
+        # Synthetic linear-separable dataset
+        torch.manual_seed(42)
+        W_true = torch.randn(width, 10, device=device) * 0.3
+
+        def make_batch(n, seed=None):
+            if seed is not None: torch.manual_seed(seed)
+            x = torch.randn(n, width, device=device)
+            y = (x @ W_true).argmax(dim=1)
+            return x, y
+
+        x_val, y_val = make_batch(VAL_SIZE, seed=99)
+
+        class ScalingModel(nn.Module):
+            def __init__(self, w):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(w, w),
+                    nn.ReLU(),
+                    nn.Linear(w, 10),
+                )
+            def forward(self, x): return self.net(x)
+
+        rank_budget = min(max(width // 4, 32), 256)
+
+        opt_configs = [
+            dict(name="Adam",         kfac=False),
+            dict(name="ClassicKFAC",  kfac=True, randomised=False),
+            dict(name="OlsveredKFAC", kfac=True, randomised=True),
+        ]
+        opt_configs = [c for c in opt_configs if c["name"].lower() not in args.skip]
+
+        def build_opt(cfg, model):
+            if not cfg['kfac']:
+                return torch.optim.Adam(model.parameters(), lr=1e-3)
+            elif cfg['randomised']:
+                from optimizer.olsvered_kfac import OlsveredKFAC
+                return OlsveredKFAC(model, lr=1e-2, damping=1e-2,
+                                    factor_update_freq=1, inv_update_freq=1,
+                                    adaptive=True, adaptive_min_n=32,
+                                    adaptive_rank_budget=rank_budget,
+                                    momentum=0.0, gamma=0.0)
+            else:
+                from optimizer.classic_kfac import ClassicKFAC
+                return ClassicKFAC(model, lr=1e-2, damping=1e-2,
+                                   factor_update_freq=1, inv_update_freq=1,
+                                   momentum=0.0, gamma=0.0)
+
+        criterion = nn.CrossEntropyLoss()
+
+        for cfg in opt_configs:
+            # ── Phase 1: pure timing ──────────────────────────────────
+            model = ScalingModel(width).to(device)
+            opt   = build_opt(cfg, model)
+            timing_ms = []
+
+            for step in range(WARMUP_STEPS + TIMING_STEPS):
+                x_b, y_b = make_batch(BATCH)
+                model.train()
+                opt.zero_grad()
+                loss = criterion(model(x_b), y_b)
+                loss.backward()
+                if device.type == 'cuda': torch.cuda.synchronize()
+                t0 = time.perf_counter()
+                opt.step()
+                if device.type == 'cuda': torch.cuda.synchronize()
+                if step >= WARMUP_STEPS:
+                    timing_ms.append((time.perf_counter() - t0) * 1000)
+
+            avg_ms = float(np.mean(timing_ms))
+            p50_ms = float(np.percentile(timing_ms, 50))
+            p99_ms = float(np.percentile(timing_ms, 99))
+            timing_results.append(dict(width=width, name=cfg['name'],
+                                       avg_ms=avg_ms, p50_ms=p50_ms, p99_ms=p99_ms))
+            print(f"    {cfg['name']:16s}  timing  avg={avg_ms:.2f}ms  "
+                  f"p50={p50_ms:.2f}ms  p99={p99_ms:.2f}ms")
+            if hasattr(opt, 'cleanup'): opt.cleanup()
+            del model, opt
+
+            # ── Phase 2: convergence quality (fixed sample budget) ────
+            torch.manual_seed(123)
+            model2 = ScalingModel(width).to(device)
+            opt2   = build_opt(cfg, model2)
+            opt_times2 = []
+
+            for step in range(CONV_STEPS):
+                x_b, y_b = make_batch(BATCH)
+                model2.train()
+                opt2.zero_grad()
+                loss = criterion(model2(x_b), y_b)
+                loss.backward()
+                t0 = time.perf_counter()
+                opt2.step()
+                if device.type == 'cuda': torch.cuda.synchronize()
+                opt_times2.append((time.perf_counter() - t0) * 1000)
+
+            model2.eval()
+            with torch.no_grad():
+                val_logits = model2(x_val)
+                val_acc  = (val_logits.argmax(1) == y_val).float().mean().item()
+                val_loss = criterion(val_logits, y_val).item()
+
+            conv_results.append(dict(width=width, name=cfg['name'],
+                                     final_acc=val_acc, final_loss=val_loss,
+                                     avg_opt_ms=float(np.mean(opt_times2))))
+            print(f"    {cfg['name']:16s}  conv    acc={val_acc:.4f}  "
+                  f"loss={val_loss:.4f}  opt={np.mean(opt_times2):.2f}ms")
+            if hasattr(opt2, 'cleanup'): opt2.cleanup()
+            del model2, opt2
+
+    # ── Save raw results ──────────────────────────────────────────────
+    result_path = OUT / "scaling_results.json"
+    with open(result_path, "w") as f:
+        json.dump(to_serialisable({"timing": timing_results, "conv": conv_results}), f, indent=2)
+    print(f"\n  Scaling results → {result_path}")
+
+    make_scaling_plot(timing_results, conv_results, CONV_STEPS, BATCH)
+    return timing_results, conv_results
+
+
+def make_scaling_plot(timing_results, conv_results, conv_steps, batch):
+    import matplotlib.pyplot as plt
+
+    COLORS = {
+        "Adam":         "#7f8c8d",
+        "ClassicKFAC":  "#c0392b",
+        "OlsveredKFAC": "#2980b9",
+    }
+    MARKERS = {"Adam": "s", "ClassicKFAC": "^", "OlsveredKFAC": "o"}
+    names  = ["Adam", "ClassicKFAC", "OlsveredKFAC"]
+    widths = sorted(set(r['width'] for r in timing_results))
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(
+        "OlsveredKFAC Scaling Benchmark\n"
+        "Step-cost scaling (left)  ·  Convergence quality (middle)  ·  "
+        "Effective throughput (right)",
+        fontsize=12, fontweight="bold"
+    )
+
+    # ── Panel 1: step-cost scaling (log-log) ─────────────────────────
+    ax = axes[0]
+    for name in names:
+        pts = sorted((r['width'], r['avg_ms']) for r in timing_results if r['name'] == name)
+        if pts:
+            ws, ms = zip(*pts)
+            ax.loglog(ws, ms, lw=2.5, marker=MARKERS[name], ms=9,
+                      color=COLORS[name], label=name)
+
+    # Theoretical reference lines anchored at smallest width
+    w0     = widths[0]
+    w_arr  = np.array(widths, dtype=float)
+    adam_pts = sorted((r['width'], r['avg_ms']) for r in timing_results if r['name'] == 'Adam')
+    if adam_pts:
+        a0 = adam_pts[0][1]  # Adam ms at smallest width
+        ax.loglog(w_arr, a0 * (w_arr / w0),       '--', lw=1, color='#95a5a6',
+                  alpha=0.6, label='O(n) ref')
+        ax.loglog(w_arr, a0 * (w_arr / w0) ** 2,  ':', lw=1, color='#e67e22',
+                  alpha=0.6, label='O(n²) ref')
+        ax.loglog(w_arr, a0 * (w_arr / w0) ** 3,  ':', lw=1, color='#e74c3c',
+                  alpha=0.6, label='O(n³) ref')
+
+    ax.set_xlabel("Hidden layer width  n", fontsize=10)
+    ax.set_ylabel("Avg optimizer step time (ms)", fontsize=10)
+    ax.set_title("Step Cost Scaling  (log-log)\n"
+                 "slope = algorithmic complexity",
+                 fontweight='bold', fontsize=10)
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3, which='both')
+
+    # ── Panel 2: convergence quality (final acc vs width) ─────────────
+    ax = axes[1]
+    for name in names:
+        pts = sorted((r['width'], r['final_acc']) for r in conv_results if r['name'] == name)
+        if pts:
+            ws, accs = zip(*pts)
+            ax.semilogx(ws, accs, lw=2.5, marker=MARKERS[name], ms=9,
+                        color=COLORS[name], label=name)
+
+    ax.set_xlabel("Hidden layer width  n", fontsize=10)
+    ax.set_ylabel(f"Val accuracy  ({conv_steps} steps, B={batch})", fontsize=10)
+    ax.set_title("Convergence Quality vs Width\n"
+                 "fixed sample budget — higher = better curvature use",
+                 fontweight='bold', fontsize=10)
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 1.05)
+
+    # ── Panel 3: effective throughput = accuracy / opt_ms ─────────────
+    ax = axes[2]
+    for name in names:
+        tim_by_w  = {r['width']: r['avg_ms']    for r in timing_results if r['name'] == name}
+        conv_by_w = {r['width']: r['final_acc'] for r in conv_results   if r['name'] == name}
+        ws = sorted(tim_by_w.keys() & conv_by_w.keys())
+        if ws:
+            throughput = [conv_by_w[w] / max(tim_by_w[w], 1e-6) for w in ws]
+            ax.semilogx(ws, throughput, lw=2.5, marker=MARKERS[name], ms=9,
+                        color=COLORS[name], label=name)
+
+    ax.set_xlabel("Hidden layer width  n", fontsize=10)
+    ax.set_ylabel("Val accuracy / opt_ms  (higher = better)", fontsize=10)
+    ax.set_title("Effective Throughput\n"
+                 "accuracy per ms of optimizer overhead\n"
+                 "crossover = where K-FAC beats Adam",
+                 fontweight='bold', fontsize=10)
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    path = OUT / "gpu_benchmark_scaling.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Scaling plot saved → {path}")
+
+
 # ─── Plotting ─────────────────────────────────────────────────────────────
 
 def make_plots(results, tag):
@@ -768,10 +1021,12 @@ def print_summary(results):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", choices=["mlp","bert","cifar","all"], default="all")
+    parser.add_argument("--task", choices=["mlp","bert","cifar","scaling","all"], default="all")
     parser.add_argument("--max-steps-mlp",   type=int, default=3000)
     parser.add_argument("--max-steps-bert",  type=int, default=8000)
-    parser.add_argument("--max-steps-cifar", type=int, default=5000)
+    parser.add_argument("--max-steps-cifar",   type=int, default=5000)
+    parser.add_argument("--max-steps-scaling", type=int, default=300,
+                        help="Convergence steps per optimizer per width in scaling task")
     parser.add_argument(
         "--skip", default="",
         help="Comma-separated optimizer names to skip. "
@@ -781,12 +1036,16 @@ def main():
     args = parser.parse_args()
     # Normalise skip list to lowercase set
     args.skip = {s.strip().lower() for s in args.skip.split(",") if s.strip()}
+    args.max_steps_scaling = args.max_steps_scaling  # expose via consistent attr name
 
     print("\nOlsveredKFAC GPU Benchmark")
     print("="*70)
     device = get_device()
 
     all_results = []
+
+    if args.task in ("scaling","all"):
+        run_scaling_benchmark(device, args)
 
     if args.task in ("mlp","all"):
         mlp_results = run_mlp_benchmark(device, args)
