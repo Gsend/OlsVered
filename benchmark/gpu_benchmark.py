@@ -538,7 +538,7 @@ def run_cifar_benchmark(device, args):
     configs = [
         dict(name="Adam",         B=128,  lr=3e-4, kfac=False),
         dict(name="ClassicKFAC",  B=512,  lr=3e-2, kfac=True, randomised=False),
-        dict(name="OlsveredKFAC", B=1024, lr=2e-1, kfac=True, randomised=True),
+        dict(name="OlsveredKFAC", B=1024, lr=2e-3, kfac=True, randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
