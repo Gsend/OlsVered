@@ -560,7 +560,7 @@ def run_cifar_benchmark(device, args):
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
-            evd_freq = 50 if torch.cuda.is_available() else 50
+            evd_freq = 10 if torch.cuda.is_available() else 50
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-3,
                                factor_update_freq=10, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
