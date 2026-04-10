@@ -363,7 +363,7 @@ def run_bert_benchmark(device, args):
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
         dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC", B=512, lr=9e-3, kfac=True,  randomised=True),
+        dict(name="OlsveredKFAC", B=1024, lr=9e-3, kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -384,14 +384,14 @@ def run_bert_benchmark(device, args):
 
         if not cfg['kfac']:
             opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'],
-                                    weight_decay=0.01)
+                                    weight_decay=0.001)
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-4,
                                factor_update_freq=50, inv_update_freq=evd_freq,
-                               adaptive=True, adaptive_min_n=128,
-                               adaptive_rank_budget=128, momentum=0.0,
+                               adaptive=True, adaptive_min_n=32,
+                               adaptive_rank_budget=256, momentum=0.0,
                                grad_clip=5.0, gamma=0.99)
         else:
             from optimizer.classic_kfac import ClassicKFAC
