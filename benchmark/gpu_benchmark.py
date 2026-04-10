@@ -363,7 +363,7 @@ def run_bert_benchmark(device, args):
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
         dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC", B=1024, lr=9e-3, kfac=True,  randomised=True),
+        dict(name="OlsveredKFAC", B=256, lr=5e-3, kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
