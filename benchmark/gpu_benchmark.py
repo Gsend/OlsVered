@@ -393,10 +393,11 @@ def run_bert_benchmark(device, args):
                                adaptive=True, adaptive_min_n=128,
                                adaptive_rank_budget=128, momentum=0.0,
                                grad_clip=5.0, gamma=0.99)
+            raise ValueError(evd_freq)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-4,
-                              factor_update_freq=100, inv_update_freq=50,
+                              factor_update_freq=20, inv_update_freq=50,
                               momentum=0.0, grad_clip=5.0, gamma=0.9)
 
         if cfg['kfac']:
