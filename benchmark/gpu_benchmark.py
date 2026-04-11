@@ -389,7 +389,7 @@ def run_bert_benchmark(device, args):
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-4,
-                               factor_update_freq=10, inv_update_freq=5,
+                               factor_update_freq=20, inv_update_freq=5,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=128, momentum=0.0,
                                grad_clip=5.0, gamma=0.95)
