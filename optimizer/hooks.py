@@ -15,6 +15,18 @@ Conv2d support (im2col):
   to the Linear case.  This is the standard K-FAC-for-CNNs formulation
   (KFAC-Reduce: spatially averaged G, see Grosse & Martens 2016).
 
+Transformer / sequence model support (KFAC-Reduce for Linear layers):
+  For a transformer's nn.Linear layer the input is (B, seq_len, d_in).
+  Naively flattening to (B·seq_len, d_in) inflates the outer-product cost
+  by seq_len (128× for BERT) — this is why opt_ms was ~1 500 ms/step
+  regardless of inv_update_freq, since the hooks ran every step.
+
+  Fix: randomly subsample at most KFACHooks._SEQ_SUBSAMPLE rows from the
+  flattened (B·seq_len, d) tensor before computing the outer product.  This
+  keeps the estimator unbiased (n_A / n_G track actual rows used) while
+  making hook cost O(_SEQ_SUBSAMPLE · d²) instead of O(B·seq_len · d²).
+  At the default cap of 512, BERT hook cost drops by ~128×.
+
 Design: accumulate directly into Gram sums each step
 ---------------------------------------------------------
 The previous implementation stored the raw activation/gradient tensors and
@@ -130,6 +142,15 @@ class KFACHooks:
         B, C_out, H_out, W_out = delta.shape
         return delta.permute(0, 2, 3, 1).reshape(B * H_out * W_out, C_out)
 
+    # Maximum number of token rows used for the outer-product accumulation when
+    # the input is a 3-D sequence tensor (batch, seq_len, d).  Capping at this
+    # value gives KFAC-Reduce behaviour for transformer Linear layers: cost is
+    # O(_SEQ_SUBSAMPLE · d²) regardless of seq_len, and the estimator stays
+    # unbiased because n_A / n_G track the actual row count that was used.
+    # For BERT (B=512, seq_len=128 → 65 536 rows) this is a 128× speedup on
+    # the hook outer products, which were the dominant cost (~1 500 ms/step).
+    _SEQ_SUBSAMPLE: int = 512
+
     def _forward_hook(
         self,
         module: nn.Module,
@@ -140,6 +161,8 @@ class KFACHooks:
 
         For nn.Linear: x̃ = x reshaped to (N, d_in).
         For nn.Conv2d: x̃ = im2col(x) of shape (B·L, C_in·kH·kW).
+        For 3-D sequence tensors (B, seq_len, d): KFAC-Reduce — subsample at
+        most _SEQ_SUBSAMPLE rows so cost is independent of seq_len.
         """
         if not self._enabled:
             return
@@ -147,7 +170,10 @@ class KFACHooks:
         if isinstance(module, nn.Conv2d):
             x = self._unfold_conv_input(x, module)   # (B·L, C_in·kH·kW)
         elif x.ndim > 2:
-            x = x.reshape(-1, x.shape[-1])            # (N, d_in)
+            x = x.reshape(-1, x.shape[-1])            # (B·seq_len, d_in)
+            if x.shape[0] > self._SEQ_SUBSAMPLE:
+                idx = torch.randperm(x.shape[0], device=x.device)[: self._SEQ_SUBSAMPLE]
+                x = x[idx]                            # (≤_SEQ_SUBSAMPLE, d_in)
 
         gram_a = x.t().mm(x)                          # (d_in, d_in)
         if module in self._A_sum:
@@ -167,6 +193,8 @@ class KFACHooks:
 
         For nn.Linear: δ̃ = delta reshaped to (N, d_out).
         For nn.Conv2d: δ̃ = delta reshaped to (B·H_out·W_out, C_out).
+        For 3-D sequence tensors (B, seq_len, d): KFAC-Reduce — subsample at
+        most _SEQ_SUBSAMPLE rows so cost is independent of seq_len.
         """
         if not self._enabled:
             return
@@ -174,7 +202,10 @@ class KFACHooks:
         if isinstance(module, nn.Conv2d):
             delta = self._reshape_conv_grad(delta)    # (B·L, C_out)
         elif delta.ndim > 2:
-            delta = delta.reshape(-1, delta.shape[-1])  # (N, d_out)
+            delta = delta.reshape(-1, delta.shape[-1])  # (B·seq_len, d_out)
+            if delta.shape[0] > self._SEQ_SUBSAMPLE:
+                idx = torch.randperm(delta.shape[0], device=delta.device)[: self._SEQ_SUBSAMPLE]
+                delta = delta[idx]                     # (≤_SEQ_SUBSAMPLE, d_out)
 
         gram_g = delta.t().mm(delta)                   # (d_out, d_out)
         if module in self._G_sum:
