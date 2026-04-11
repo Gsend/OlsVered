@@ -448,6 +448,66 @@ class OlsveredKFAC(torch.optim.Optimizer):
                 }
         return stats
 
+    def kfac_state_dict(self) -> dict:
+        """Serialize K-FAC curvature state for warm-start checkpointing.
+
+        Saves the Gram matrices (_factors) and their EVDs (_inverses) keyed by
+        layer index rather than module object, so the dict is pickle-safe.
+
+        Usage::
+
+            torch.save(opt.kfac_state_dict(), "kfac_state.pt")
+
+        Returns
+        -------
+        dict with keys:
+            "step_count" : int
+            "factors"    : {layer_idx: (A_cpu, G_cpu)}
+            "inverses"   : {layer_idx: (Q_A_cpu, il_A_cpu, Q_G_cpu, il_G_cpu)}
+        """
+        mod_to_idx = {mod: i for i, mod in enumerate(self.hooks.linear_layers)}
+        state: dict = {"step_count": self._step_count, "factors": {}, "inverses": {}}
+        for mod, (A, G) in self._factors.items():
+            if mod in mod_to_idx:
+                state["factors"][mod_to_idx[mod]] = (A.cpu(), G.cpu())
+        for mod, (Q_A, il_A, Q_G, il_G) in self._inverses.items():
+            if mod in mod_to_idx:
+                state["inverses"][mod_to_idx[mod]] = (
+                    Q_A.cpu(), il_A.cpu(), Q_G.cpu(), il_G.cpu())
+        return state
+
+    def load_kfac_state_dict(self, state: dict, device=None):
+        """Restore K-FAC curvature state from a checkpoint.
+
+        Call this after constructing the optimizer but before the first step.
+        The model must have the same architecture as when the state was saved.
+
+        Parameters
+        ----------
+        state  : dict returned by kfac_state_dict()
+        device : torch.device or None — defaults to the model's current device
+        """
+        if device is None:
+            device = next(self.model.parameters()).device
+        idx_to_mod = {i: mod for i, mod in enumerate(self.hooks.linear_layers)}
+
+        self._step_count = int(state.get("step_count", 0))
+
+        self._factors = {}
+        for i, (A, G) in state.get("factors", {}).items():
+            mod = idx_to_mod.get(int(i))
+            if mod is not None:
+                self._factors[mod] = (A.to(device), G.to(device))
+
+        self._inverses = {}
+        for i, (Q_A, il_A, Q_G, il_G) in state.get("inverses", {}).items():
+            mod = idx_to_mod.get(int(i))
+            if mod is not None:
+                self._inverses[mod] = (
+                    Q_A.to(device), il_A.to(device),
+                    Q_G.to(device), il_G.to(device),
+                )
+
     def cleanup(self):
         """Remove hooks and free cached state."""
         self.hooks.remove()

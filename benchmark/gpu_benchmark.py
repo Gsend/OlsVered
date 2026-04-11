@@ -363,7 +363,7 @@ def run_bert_benchmark(device, args):
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
         dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC", B=512, lr=9e-3, kfac=True,  randomised=True),
+        dict(name="OlsveredKFAC", B=512, lr=3e-3, kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -388,11 +388,11 @@ def run_bert_benchmark(device, args):
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-4,
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=3e-3,
                                factor_update_freq=20, inv_update_freq=5,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=128, momentum=0.0,
-                               grad_clip=5.0, gamma=0.95)
+                               grad_clip=1.0, gamma=0.95)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-4,
@@ -412,18 +412,49 @@ def run_bert_benchmark(device, args):
         else:
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 opt, T_max=args.max_steps_bert, eta_min=cfg['lr'] * 0.01)
+        # Checkpoint paths — one per optimizer so runs don't overwrite each other
+        ckpt_name  = cfg['name'].lower().replace(' ', '_')
+        CKPT_MODEL = OUT / f"bert_ckpt_{ckpt_name}_model.pt"
+        CKPT_OPT   = OUT / f"bert_ckpt_{ckpt_name}_opt.pt"
+        CKPT_KFAC  = OUT / f"bert_ckpt_{ckpt_name}_kfac.pt"
+        CKPT_META  = OUT / f"bert_ckpt_{ckpt_name}_meta.pt"
+
+        # Resume from checkpoint if available
+        step = samples_seen = 0
+        curve_steps=[]; curve_samples=[]; curve_times=[]
+        curve_val_acc=[]; curve_val_loss=[]
+        if CKPT_MODEL.exists() and CKPT_META.exists():
+            print(f"     Resuming from checkpoint {CKPT_MODEL.name} ...")
+            model.load_state_dict(torch.load(CKPT_MODEL, map_location=device))
+            meta = torch.load(CKPT_META, map_location="cpu")
+            step         = meta["step"]
+            samples_seen = meta["samples_seen"]
+            curve_steps  = meta["curve_steps"]
+            curve_samples= meta["curve_samples"]
+            curve_times  = meta["curve_times"]
+            curve_val_acc= meta["curve_val_acc"]
+            curve_val_loss=meta["curve_val_loss"]
+            if CKPT_OPT.exists():
+                opt.load_state_dict(torch.load(CKPT_OPT, map_location=device))
+            if CKPT_KFAC.exists() and hasattr(opt, 'load_kfac_state_dict'):
+                opt.load_kfac_state_dict(
+                    torch.load(CKPT_KFAC, map_location="cpu"), device=device)
+                print(f"     K-FAC curvature state restored — "
+                      f"preconditioner is pre-warmed ({len(opt._factors)} layers).")
+            # Restore scheduler to the right step
+            for _ in range(step):
+                scheduler.step()
+            print(f"     Resumed at step={step}, samples={samples_seen:,}")
+
         data_iter = iter(train_loader)
         power_mon = PowerMonitor()
         reset_memory_stats()
         power_mon.start()
 
         t0 = time.perf_counter()
-        step = samples_seen = 0
         opt_times=[]; fwdbwd_times=[]
         record_every_n = 5_000
-        next_record = record_every_n
-        curve_steps=[]; curve_samples=[]; curve_times=[]
-        curve_val_acc=[]; curve_val_loss=[]
+        next_record = (samples_seen // record_every_n + 1) * record_every_n
 
         while step < args.max_steps_bert:
             try: batch = next(data_iter)
@@ -461,6 +492,19 @@ def run_bert_benchmark(device, args):
                       f"val_acc={va:.4f}  val_loss={vl:.4f}  "
                       f"lr={cur_lr:.2e}  wall={wall/60:.1f}min  "
                       f"opt={np.mean(opt_times[-20:])*1000:.1f}ms")
+                # Save checkpoint after every validation point
+                torch.save(model.state_dict(), CKPT_MODEL)
+                if hasattr(opt, 'state_dict'):
+                    torch.save(opt.state_dict(), CKPT_OPT)
+                if hasattr(opt, 'kfac_state_dict'):
+                    torch.save(opt.kfac_state_dict(), CKPT_KFAC)
+                torch.save(dict(
+                    step=step, samples_seen=samples_seen,
+                    curve_steps=curve_steps, curve_samples=curve_samples,
+                    curve_times=curve_times, curve_val_acc=curve_val_acc,
+                    curve_val_loss=curve_val_loss,
+                ), CKPT_META)
+                print(f"     Checkpoint saved → {CKPT_MODEL.name}")
 
         avg_power = power_mon.stop()
         peak_mem  = gpu_memory_gb()
