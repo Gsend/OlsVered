@@ -362,8 +362,8 @@ def run_bert_benchmark(device, args):
 
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
-        dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
         dict(name="OlsveredKFAC", B=512, lr=3e-3, kfac=True,  randomised=True),
+        dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -461,7 +461,7 @@ def run_bert_benchmark(device, args):
         # over ACC_DECAY_STEPS remaining steps.  Stops the high-LR plateau that
         # follows early K-FAC convergence without shortening the warmup phase.
         ACC_DECAY_THRESHOLD = 0.91   # trigger accuracy
-        ACC_DECAY_STEPS     = 500    # steps to reach eta_min after trigger
+        ACC_DECAY_STEPS     = 2000   # steps to reach eta_min after trigger
         acc_decay_triggered = False
 
         while step < args.max_steps_bert:
@@ -496,15 +496,28 @@ def run_bert_benchmark(device, args):
                 curve_val_loss.append(vl)
                 next_record += record_every_n
                 cur_lr = scheduler.get_last_lr()[0]
-                # Threshold-triggered LR decay
+                # Threshold-triggered LR decay + damping reduction
                 if cfg['kfac'] and not acc_decay_triggered and va >= ACC_DECAY_THRESHOLD:
                     acc_decay_triggered = True
                     eta_min = cfg['lr'] * 0.002
+                    # Use remaining steps so cosine reaches eta_min exactly at
+                    # the end of training — no cycling, no LR bouncing back up.
+                    remaining_steps = max(1, args.max_steps_bert - step)
                     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                        opt, T_max=ACC_DECAY_STEPS, eta_min=eta_min)
-                    print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
-                          f"switching to fast cosine decay over {ACC_DECAY_STEPS} steps "
-                          f"(lr {cur_lr:.2e} → {eta_min:.2e}) ***")
+                        opt, T_max=remaining_steps, eta_min=eta_min)
+                    # Drop damping so K-FAC keeps using curvature at low LR.
+                    # High damping + decaying LR → near-zero effective update.
+                    if hasattr(opt, 'damping'):
+                        old_damp = opt.damping
+                        opt.damping = 2e-4
+                        print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
+                              f"cosine decay over {remaining_steps} remaining steps "
+                              f"(lr {cur_lr:.2e} → {eta_min:.2e}), "
+                              f"damping {old_damp:.0e} → {opt.damping:.0e} ***")
+                    else:
+                        print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
+                              f"cosine decay over {remaining_steps} remaining steps "
+                              f"(lr {cur_lr:.2e} → {eta_min:.2e}) ***")
                 print(f"     step={step:5d}  samples={samples_seen:7,}  "
                       f"val_acc={va:.4f}  val_loss={vl:.4f}  "
                       f"lr={cur_lr:.2e}  wall={wall/60:.1f}min  "
@@ -1084,7 +1097,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", choices=["mlp","bert","cifar","scaling","all"], default="all")
     parser.add_argument("--max-steps-mlp",   type=int, default=3000)
-    parser.add_argument("--max-steps-bert",  type=int, default=8000)
+    parser.add_argument("--max-steps-bert",  type=int, default=5000)
     parser.add_argument("--max-steps-cifar",   type=int, default=5000)
     parser.add_argument("--max-steps-scaling", type=int, default=300,
                         help="Convergence steps per optimizer per width in scaling task")
