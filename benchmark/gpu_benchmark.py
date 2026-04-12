@@ -456,6 +456,14 @@ def run_bert_benchmark(device, args):
         record_every_n = 5_000
         next_record = (samples_seen // record_every_n + 1) * record_every_n
 
+        # Threshold-triggered LR decay: when val_acc first crosses this level,
+        # replace the scheduler with a fast cosine decay from current LR → eta_min
+        # over ACC_DECAY_STEPS remaining steps.  Stops the high-LR plateau that
+        # follows early K-FAC convergence without shortening the warmup phase.
+        ACC_DECAY_THRESHOLD = 0.91   # trigger accuracy
+        ACC_DECAY_STEPS     = 500    # steps to reach eta_min after trigger
+        acc_decay_triggered = False
+
         while step < args.max_steps_bert:
             try: batch = next(data_iter)
             except StopIteration:
@@ -488,6 +496,15 @@ def run_bert_benchmark(device, args):
                 curve_val_loss.append(vl)
                 next_record += record_every_n
                 cur_lr = scheduler.get_last_lr()[0]
+                # Threshold-triggered LR decay
+                if cfg['kfac'] and not acc_decay_triggered and va >= ACC_DECAY_THRESHOLD:
+                    acc_decay_triggered = True
+                    eta_min = cfg['lr'] * 0.002
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        opt, T_max=ACC_DECAY_STEPS, eta_min=eta_min)
+                    print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
+                          f"switching to fast cosine decay over {ACC_DECAY_STEPS} steps "
+                          f"(lr {cur_lr:.2e} → {eta_min:.2e}) ***")
                 print(f"     step={step:5d}  samples={samples_seen:7,}  "
                       f"val_acc={va:.4f}  val_loss={vl:.4f}  "
                       f"lr={cur_lr:.2e}  wall={wall/60:.1f}min  "
