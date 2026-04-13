@@ -1363,9 +1363,22 @@ def make_plots(results, tag):
     fig, axes = plt.subplots(2, 3, figsize=(18, 11))
     fig.suptitle(f"OlsveredKFAC GPU Benchmark — {tag}", fontsize=13, fontweight="bold")
 
+    # Detect whether results use accuracy (classification) or perplexity (LM)
+    _has_ppl = any("curve_val_ppl" in r for r in results)
+    _acc_key  = "curve_val_ppl" if _has_ppl else "curve_val_acc"
+    _acc_lbl  = "Val perplexity (↓)"   if _has_ppl else "Val accuracy"
+    _acc_t1   = "Val Perplexity vs Steps"          if _has_ppl else "Val Accuracy vs Steps"
+    _acc_t2   = "Val Perplexity vs Samples Seen\n(fair cross-batchsize comparison)" \
+                if _has_ppl else "Val Accuracy vs Samples Seen\n(fair cross-batchsize comparison)"
+    _acc_t3   = "Val Perplexity vs Wall Time"      if _has_ppl else "Val Accuracy vs Wall Time"
+
     def plot_curve(ax, x_key, xlabel, ylabel_key, ylabel, title):
         for r in results:
-            ax.plot(r[x_key], r[ylabel_key], lw=2, marker="o", ms=4,
+            ys = r.get(ylabel_key) or []
+            xs = r.get(x_key) or []
+            if not xs or not ys:
+                continue
+            ax.plot(xs, ys, lw=2, marker="o", ms=4,
                     color=COLORS.get(r["name"],"black"), label=r["name"])
         ax.set_xlabel(xlabel, fontsize=9)
         ax.set_ylabel(ylabel, fontsize=9)
@@ -1373,11 +1386,11 @@ def make_plots(results, tag):
         ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
     plot_curve(axes[0,0], "curve_steps",   "Gradient steps",
-               "curve_val_acc", "Val accuracy", "Val Accuracy vs Steps")
+               _acc_key, _acc_lbl, _acc_t1)
     plot_curve(axes[0,1], "curve_samples", "Samples seen",
-               "curve_val_acc", "Val accuracy", "Val Accuracy vs Samples Seen\n(fair cross-batchsize comparison)")
+               _acc_key, _acc_lbl, _acc_t2)
     plot_curve(axes[0,2], "curve_times",   "Wall time (s)",
-               "curve_val_acc", "Val accuracy", "Val Accuracy vs Wall Time")
+               _acc_key, _acc_lbl, _acc_t3)
     plot_curve(axes[1,0], "curve_steps",   "Gradient steps",
                "curve_val_loss","Val loss",     "Val Loss vs Steps")
     plot_curve(axes[1,1], "curve_samples", "Samples seen",
@@ -1434,10 +1447,14 @@ def print_summary(results):
               f"{r['steps']:>7,}  {r['samples']:>9,}  {wall:>8}  "
               f"{r['avg_fwdbwd_ms']:>10.1f}  {r['avg_opt_ms']:>8.1f}  "
               f"{r['peak_mem_gb']:>7.2f}  {pwr:>6}")
-    print(f"\n  Final val accuracy:")
+    _has_ppl = any("curve_val_ppl" in r for r in results)
+    _metric_key = "curve_val_ppl" if _has_ppl else "curve_val_acc"
+    _metric_lbl = "Final val perplexity" if _has_ppl else "Final val accuracy"
+    print(f"\n  {_metric_lbl}:")
     for r in results:
-        acc = r["curve_val_acc"][-1] if r["curve_val_acc"] else 0
-        print(f"    {r['name']:<16}: {acc:.4f}")
+        curve = r.get(_metric_key) or []
+        val = curve[-1] if curve else 0
+        print(f"    {r['name']:<16}: {val:.4f}")
 
     # Compute key ratios
     by_name = {r["name"]: r for r in results}
