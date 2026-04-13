@@ -21,6 +21,12 @@
 #    --steps-cifar   N                      Max steps for CIFAR task            (default: 5000)
 #    --steps-scaling N                      Convergence steps per width/optimizer in
 #                                           scaling task                        (default: 300)
+#    --lr-ols-transformer LR               Override OlsveredKFAC lr in transformer task
+#                                           (default: 3e-3). Example: --lr-ols-transformer 5e-3
+#    --lr-cls-transformer LR               Override ClassicKFAC lr in transformer task
+#                                           (default: 3e-3). Example: --lr-cls-transformer 5e-3
+#    --lr-sweep-transformer                Run LR sweep [1e-3, 3e-3, 5e-3, 8e-3] for both
+#                                           K-FAC optimizers and report best LR
 #    --no-tmux                         Run directly, without tmux session
 #    --session   NAME                  tmux session name (default: benchmark)
 #    --help                            Show this help
@@ -33,6 +39,8 @@
 #    bash run_benchmark.sh --task mlp --skip adam
 #    bash run_benchmark.sh --task all --skip adam,classickfac
 #    bash run_benchmark.sh --task mlp --steps-mlp 1000 --no-tmux
+#    bash run_benchmark.sh --task transformer --lr-sweep-transformer
+#    bash run_benchmark.sh --task transformer --lr-ols-transformer 5e-3 --lr-cls-transformer 5e-3
 #
 #  Results are saved incrementally to benchmark/results/ after each optimizer
 #  completes — so a dropped connection never loses a finished run.
@@ -48,6 +56,9 @@ STEPS_BERT=8000
 STEPS_CIFAR=5000
 STEPS_SCALING=300
 STEPS_TRANSFORMER=5000
+LR_OLS_TRANSFORMER=""
+LR_CLS_TRANSFORMER=""
+LR_SWEEP_TRANSFORMER=false
 USE_TMUX=true
 SESSION="benchmark"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,7 +78,10 @@ while [[ $# -gt 0 ]]; do
         --steps-bert)    STEPS_BERT="$2";    shift 2 ;;
         --steps-cifar)   STEPS_CIFAR="$2";   shift 2 ;;
         --steps-scaling)     STEPS_SCALING="$2";     shift 2 ;;
-        --steps-transformer) STEPS_TRANSFORMER="$2"; shift 2 ;;
+        --steps-transformer)     STEPS_TRANSFORMER="$2";     shift 2 ;;
+        --lr-ols-transformer)    LR_OLS_TRANSFORMER="$2";    shift 2 ;;
+        --lr-cls-transformer)    LR_CLS_TRANSFORMER="$2";    shift 2 ;;
+        --lr-sweep-transformer)  LR_SWEEP_TRANSFORMER=true;  shift   ;;
         --no-tmux)    USE_TMUX=false;  shift   ;;
         --session)    SESSION="$2";    shift 2 ;;
         --help|-h)
@@ -152,7 +166,10 @@ PY_CMD+=" --max-steps-bert ${STEPS_BERT}"
 PY_CMD+=" --max-steps-cifar ${STEPS_CIFAR}"
 PY_CMD+=" --max-steps-scaling ${STEPS_SCALING}"
 PY_CMD+=" --max-steps-transformer ${STEPS_TRANSFORMER}"
-[[ -n "$SKIP" ]] && PY_CMD+=" --skip ${SKIP}"
+[[ -n "$SKIP" ]]              && PY_CMD+=" --skip ${SKIP}"
+[[ -n "$LR_OLS_TRANSFORMER" ]] && PY_CMD+=" --lr-ols-transformer ${LR_OLS_TRANSFORMER}"
+[[ -n "$LR_CLS_TRANSFORMER" ]] && PY_CMD+=" --lr-cls-transformer ${LR_CLS_TRANSFORMER}"
+[[ "$LR_SWEEP_TRANSFORMER" == true ]] && PY_CMD+=" --lr-sweep-transformer"
 
 info "Command: ${PY_CMD}"
 echo ""

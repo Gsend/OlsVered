@@ -908,10 +908,12 @@ def run_transformer_benchmark(device, args):
 
     vocab_size = tokenizer.vocab_size   # 50 257
 
+    _lr_ols = args.lr_ols_transformer if args.lr_ols_transformer is not None else 3e-3
+    _lr_cls = args.lr_cls_transformer if args.lr_cls_transformer is not None else 3e-3
     configs = [
-        dict(name="Adam",         B=32, lr=3e-4, kfac=False),
-        dict(name="OlsveredKFAC", B=64, lr=3e-3, kfac=True, randomised=True),
-        dict(name="ClassicKFAC",  B=64, lr=3e-3, kfac=True, randomised=False),
+        dict(name="Adam",         B=32, lr=3e-4,   kfac=False),
+        dict(name="OlsveredKFAC", B=64, lr=_lr_ols, kfac=True, randomised=True),
+        dict(name="ClassicKFAC",  B=64, lr=_lr_cls, kfac=True, randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -1475,6 +1477,17 @@ def main():
              "Valid: adam, classickfac, olsveredkfac. "
              "Example: --skip adam,classickfac"
     )
+    parser.add_argument("--lr-ols-transformer", type=float, default=None,
+                        help="Override learning rate for OlsveredKFAC in transformer task. "
+                             "Default: 3e-3. Example: --lr-ols-transformer 5e-3")
+    parser.add_argument("--lr-cls-transformer", type=float, default=None,
+                        help="Override learning rate for ClassicKFAC in transformer task. "
+                             "Default: 3e-3. Example: --lr-cls-transformer 5e-3")
+    parser.add_argument("--lr-sweep-transformer", action="store_true",
+                        help="Run a learning-rate sweep for both K-FAC optimizers in the "
+                             "transformer task. Tests [1e-3, 3e-3, 5e-3, 8e-3] for each "
+                             "using --max-steps-transformer steps, reports best LR and ppl. "
+                             "Adam is not swept (its LR 3e-4 is well-tuned).")
     args = parser.parse_args()
     # Normalise skip list to lowercase set
     args.skip = {s.strip().lower() for s in args.skip.split(",") if s.strip()}
@@ -1510,7 +1523,59 @@ def main():
             print_summary(bert_results)
             make_plots(bert_results, "BERT-base SST-2")
 
-    if args.task in ("transformer","all"):
+    if args.task in ("transformer","all") and getattr(args, "lr_sweep_transformer", False):
+        # ── LR sweep: run each K-FAC optimizer at 4 candidate learning rates ──
+        # Uses the same step budget as --max-steps-transformer for fair comparison.
+        # Adam is excluded from the sweep (lr=3e-4 is well-established for AdamW).
+        _LR_CANDIDATES = [1e-3, 3e-3, 5e-3, 8e-3]
+        print("\n" + "="*70)
+        print("  LR SWEEP — SmallGPT / WikiText-2")
+        print(f"  Candidates: {_LR_CANDIDATES}  |  Steps: {args.max_steps_transformer}")
+        print("="*70)
+        import copy
+        sweep_best = {}   # opt_name -> (best_lr, best_ppl, result)
+        sweep_args = copy.copy(args)
+        sweep_args.skip = {"adam"}          # skip Adam during sweep
+        for opt_name, key in [("OlsveredKFAC", "lr_ols_transformer"),
+                               ("ClassicKFAC",  "lr_cls_transformer")]:
+            if opt_name.lower() in args.skip:
+                continue
+            print(f"\n  ── Sweeping {opt_name} ──")
+            best_lr = None; best_ppl = float("inf"); best_result = None
+            for lr_candidate in _LR_CANDIDATES:
+                # Skip the other optimizer each iteration
+                other = "classickfac" if opt_name == "OlsveredKFAC" else "olsveredkfac"
+                sweep_args.skip = {"adam", other}
+                setattr(sweep_args, "lr_ols_transformer",
+                        lr_candidate if opt_name == "OlsveredKFAC" else args.lr_ols_transformer)
+                setattr(sweep_args, "lr_cls_transformer",
+                        lr_candidate if opt_name == "ClassicKFAC"  else args.lr_cls_transformer)
+                print(f"\n     lr = {lr_candidate:.0e}")
+                res_list = run_transformer_benchmark(device, sweep_args)
+                if res_list:
+                    r = res_list[0]
+                    ppl = r.get("final_val_ppl") or (r.get("curve_val_ppl") or [float("inf")])[-1]
+                    print(f"     → final ppl = {ppl:.1f}")
+                    if ppl < best_ppl:
+                        best_ppl = ppl; best_lr = lr_candidate; best_result = r
+            if best_result:
+                sweep_best[opt_name] = (best_lr, best_ppl, best_result)
+                print(f"\n  ★  {opt_name}: best lr = {best_lr:.0e}  →  ppl = {best_ppl:.1f}")
+
+        print("\n" + "="*70)
+        print("  LR SWEEP RESULTS")
+        print("="*70)
+        for opt_name, (blr, bppl, _) in sweep_best.items():
+            print(f"  {opt_name:<16}  best lr = {blr:.0e}   final ppl = {bppl:.1f}")
+        if sweep_best:
+            ols_lr = sweep_best.get("OlsveredKFAC", (3e-3,))[0]
+            cls_lr = sweep_best.get("ClassicKFAC",  (3e-3,))[0]
+            print(f"\n  Re-run with:")
+            print(f"    bash run_benchmark.sh --task transformer "
+                  f"--lr-ols-transformer {ols_lr:.0e} "
+                  f"--lr-cls-transformer {cls_lr:.0e}")
+
+    if args.task in ("transformer","all") and not getattr(args, "lr_sweep_transformer", False):
         transformer_results = run_transformer_benchmark(device, args)
         all_results.extend(transformer_results)
         if transformer_results:
