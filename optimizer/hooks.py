@@ -50,6 +50,9 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from optimizer.gram_estimator import GramMatrixEstimator
 
 # PyTorch emits this UserWarning every backward pass for layers whose *input*
 # doesn't require grad (e.g. the first layer, which receives raw data).
@@ -59,13 +62,19 @@ warnings.filterwarnings(
     message="Full backward hook is firing",
     category=UserWarning,
 )
-import torch.nn.functional as F
 
-class KFACHooks:
-    """Manages forward/backward hooks on Linear layers for K-FAC factor capture.
 
-    Gram matrices are accumulated incrementally every step.  Call get_factors()
-    to read the current averages, then clear() to reset for the next window.
+class KFACHooks(GramMatrixEstimator):
+    """Manages forward/backward hooks on Linear/Conv2d layers for K-FAC.
+
+    Implements :class:`GramMatrixEstimator`.  Accumulates per-layer Gram
+    matrices incrementally every step:
+
+        A = E[xᵀx]  of shape (d_in,  d_in)   — input activation covariance
+        G = E[δᵀδ]  of shape (d_out, d_out)  — output gradient covariance
+
+    Call ``get_factors()`` to read the running averages, then ``clear()``
+    to reset for the next accumulation window.
 
     Usage::
 
@@ -73,11 +82,10 @@ class KFACHooks:
         hooks.enable()
         for step in range(update_freq):
             loss = model(x)
-            loss.backward()          # triggers hooks
-        factors = hooks.get_factors()
-        hooks.clear()
-        # ... when training is done:
-        hooks.remove()
+            loss.backward()           # triggers hooks → A_sum, G_sum updated
+        factors = hooks.get_factors() # dict: module → (A, G)
+        hooks.clear()                 # reset for next window
+        hooks.remove()                # when training is done
     """
 
     def __init__(self, model: nn.Module, max_gram_dim: int = 0):
@@ -123,6 +131,11 @@ class KFACHooks:
     def linear_layers(self) -> List[nn.Module]:
         """All tracked layers: nn.Linear and nn.Conv2d."""
         return self._linear_layers
+
+    @property
+    def is_enabled(self) -> bool:
+        """True if hooks are currently attached and accumulating."""
+        return self._enabled
 
     def enable(self):
         """Register hooks on all Linear and Conv2d layers."""

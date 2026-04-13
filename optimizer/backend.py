@@ -291,3 +291,28 @@ def randomized_eigh_f32(gram: np.ndarray, k: int, n_iter: int = 1, damping: floa
 def get_backend_name() -> str:
     """Return the name of the active backend."""
     return "olssm (Rust)" if _HAS_RUST else "numpy/scipy (fallback)"
+
+
+def get_backend_info() -> dict:
+    """Return a dict describing the active backend.
+
+    Useful for verifying at runtime which backend is loaded and for
+    logging/debugging.  Example output::
+
+        {'rust_available': True, 'backend': 'olssm (Rust)', 'version': '0.3.0'}
+
+    Returns
+    -------
+    dict with keys:
+        ``rust_available`` bool   — True if the compiled Rust module loaded
+        ``backend``        str    — human-readable backend name
+        ``version``        str    — Rust module version, or ``'n/a'``
+    """
+    version = "n/a"
+    if _HAS_RUST:
+        version = getattr(_rust_backend, "__version__", "n/a")
+    return {
+        "rust_available": _HAS_RUST,
+        "backend": get_backend_name(),
+        "version": version,
+    }

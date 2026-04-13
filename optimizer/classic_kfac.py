@@ -8,15 +8,19 @@ strategies, not implementation differences.
 Natural gradient update:  ΔW = G⁻¹ · ∇L · A⁻¹
 """
 
+import logging
 import time
+from collections import deque
 from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
-from collections import deque
 
+from optimizer.errors import ConfigurationError
 from optimizer.hooks import KFACHooks
+
+logger = logging.getLogger(__name__)
 
 class ClassicKFAC(torch.optim.Optimizer):
     """K-FAC optimizer with classical torch.linalg.inv backend.
@@ -59,8 +63,15 @@ class ClassicKFAC(torch.optim.Optimizer):
         gamma: float = 0.0,
         max_gram_dim: int = 0,
     ):
-        print( 'factor_update_freq:', factor_update_freq,
-        'inv_update_freq:' ,inv_update_freq)
+        if inv_update_freq < factor_update_freq:
+            raise ConfigurationError(
+                f"inv_update_freq ({inv_update_freq}) must be >= "
+                f"factor_update_freq ({factor_update_freq})."
+            )
+        logger.debug(
+            "ClassicKFAC init: factor_update_freq=%d  inv_update_freq=%d",
+            factor_update_freq, inv_update_freq,
+        )
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
         params = []
@@ -238,3 +249,13 @@ class ClassicKFAC(torch.optim.Optimizer):
         self._factors.clear()
         self._inverses.clear()
         self._momentum_buffers.clear()
+
+    def __repr__(self) -> str:
+        return (
+            f"ClassicKFAC("
+            f"damping={self.damping}, "
+            f"factor_update_freq={self.factor_update_freq}, "
+            f"inv_update_freq={self.inv_update_freq}, "
+            f"gamma={self.gamma}, "
+            f"n_layers={len(self.hooks.linear_layers)})"
+        )

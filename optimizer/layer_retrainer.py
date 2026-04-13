@@ -703,3 +703,81 @@ class OlsSMLayerRetrainer:
             )
         return "\n".join(lines)
                                        
+    # -----------------------------------------------------------------------
+    # Checkpoint support
+    # -----------------------------------------------------------------------
+
+    def get_gram_state(self) -> dict:
+        """Serialise accumulated Gram matrices for checkpointing.
+
+        Captures the current state of all XtX / XtY accumulators so a
+        partially-accumulated sweep can be resumed without replaying the data.
+
+        Returns
+        -------
+        dict with integer keys 0 … n_layers-1, each mapping to::
+
+            {
+                "XtX":      np.ndarray (d_in_aug, d_in_aug) float32,
+                "XtY":      np.ndarray (d_in_aug, d_out)    float32,
+                "n_samples": int,
+            }
+
+        Usage::
+
+            state = retrainer.get_gram_state()
+            torch.save(state, "gram_checkpoint.pt")
+            # later …
+            retrainer.load_gram_state(torch.load("gram_checkpoint.pt"))
+        """
+        return {
+            i: {
+                "XtX":      g.XtX.cpu().numpy(),
+                "XtY":      g.XtY.cpu().numpy(),
+                "n_samples": g.n_samples,
+            }
+            for i, g in enumerate(self._grams)
+        }
+
+    def load_gram_state(self, state: dict) -> None:
+        """Restore Gram accumulators from a checkpoint.
+
+        Parameters
+        ----------
+        state : dict
+            Output of a previous :meth:`get_gram_state` call.
+
+        Raises
+        ------
+        CheckpointError
+            If the state dict has a different number of layers or
+            incompatible matrix shapes.
+        """
+        import numpy as np
+        from optimizer.errors import CheckpointError
+
+        if len(state) != self.n_layers:
+            raise CheckpointError(
+                f"Checkpoint has {len(state)} layer(s), "
+                f"but retrainer has n_layers={self.n_layers}."
+            )
+        for i, data in state.items():
+            i = int(i)
+            if i >= len(self._grams):
+                raise CheckpointError(f"Layer index {i} out of range.")
+            g = self._grams[i]
+            XtX = torch.from_numpy(np.array(data["XtX"])).to(self.device, dtype=self.dtype)
+            XtY = torch.from_numpy(np.array(data["XtY"])).to(self.device, dtype=self.dtype)
+            if XtX.shape != g.XtX.shape:
+                raise CheckpointError(
+                    f"Layer {i}: checkpoint XtX shape {XtX.shape} != "
+                    f"expected {g.XtX.shape}."
+                )
+            if XtY.shape != g.XtY.shape:
+                raise CheckpointError(
+                    f"Layer {i}: checkpoint XtY shape {XtY.shape} != "
+                    f"expected {g.XtY.shape}."
+                )
+            g.XtX.copy_(XtX)
+            g.XtY.copy_(XtY)
+            g.n_samples = int(data["n_samples"])
