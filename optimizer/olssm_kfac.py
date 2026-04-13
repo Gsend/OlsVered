@@ -46,7 +46,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
         Default: 10.
     inv_update_freq : int
         How often (in steps) to recompute cached inverses A⁻¹, G⁻¹.
-        Must be ≥ factor_update_freq. Default: 10.
+        Default: 10.
     weight_decay : float
         L2 regularisation coefficient. Default: 0.
     momentum : float
@@ -118,11 +118,6 @@ class OlsSMKFAC(torch.optim.Optimizer):
                 "rank and adaptive=True are mutually exclusive. "
                 "Use adaptive=True to auto-select rank per layer, "
                 "or rank=k to use a fixed global rank — not both."
-            )
-        if inv_update_freq < factor_update_freq:
-            raise ConfigurationError(
-                f"inv_update_freq ({inv_update_freq}) must be >= "
-                f"factor_update_freq ({factor_update_freq})."
             )
         if damping <= 0:
             raise ConfigurationError(f"damping must be > 0, got {damping}.")

@@ -63,11 +63,6 @@ class ClassicKFAC(torch.optim.Optimizer):
         gamma: float = 0.0,
         max_gram_dim: int = 0,
     ):
-        if inv_update_freq < factor_update_freq:
-            raise ConfigurationError(
-                f"inv_update_freq ({inv_update_freq}) must be >= "
-                f"factor_update_freq ({factor_update_freq})."
-            )
         logger.debug(
             "ClassicKFAC init: factor_update_freq=%d  inv_update_freq=%d",
             factor_update_freq, inv_update_freq,
