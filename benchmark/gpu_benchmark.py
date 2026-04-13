@@ -909,9 +909,9 @@ def run_transformer_benchmark(device, args):
     vocab_size = tokenizer.vocab_size   # 50 257
 
     configs = [
-        dict(name="Adam",         B=64,  lr=3e-4, kfac=False),
-        dict(name="OlsveredKFAC", B=256, lr=3e-3, kfac=True, randomised=True),
-        dict(name="ClassicKFAC",  B=256, lr=3e-3, kfac=True, randomised=False),
+        dict(name="Adam",         B=32, lr=3e-4, kfac=False),
+        dict(name="OlsveredKFAC", B=64, lr=3e-3, kfac=True, randomised=True),
+        dict(name="ClassicKFAC",  B=64, lr=3e-3, kfac=True, randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
