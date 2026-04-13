@@ -860,11 +860,13 @@ def run_transformer_benchmark(device, args):
     raw = load_dataset("wikitext", "wikitext-2-raw-v1")
 
     def tokenize(batch):
-        ids = tokenizer(batch["text"], truncation=False)["input_ids"]
-        # Concatenate all token lists into one long sequence then chunk
+        # Iterate individually — WikiText-2 contains empty lines and section
+        # headers that cause batch tokenization to fail on some tokenizer versions.
         flat = []
-        for seq in ids:
-            flat.extend(seq)
+        for text in batch["text"]:
+            if isinstance(text, str) and text.strip():
+                enc = tokenizer(text, truncation=False, add_special_tokens=False)
+                flat.extend(enc["input_ids"])
         chunks = [flat[i:i + SEQ_LEN + 1]
                   for i in range(0, len(flat) - SEQ_LEN, SEQ_LEN)]
         return {"input_ids": chunks}
