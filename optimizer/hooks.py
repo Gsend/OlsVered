@@ -1,7 +1,7 @@
 """
 Forward and backward hooks for capturing activation and gradient statistics.
 
-Shared infrastructure used by both OlsveredKFAC and ClassicKFAC.
+Shared infrastructure used by both OlsSMKFAC and ClassicKFAC.
 Registers hooks on nn.Linear and nn.Conv2d layers to capture:
   - Input activations x (forward hook)  → accumulates A_sum = XᵀX
   - Output gradients δ (backward hook)  → accumulates G_sum = δᵀδ
@@ -60,7 +60,6 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 import torch.nn.functional as F
-
 
 class KFACHooks:
     """Manages forward/backward hooks on Linear layers for K-FAC factor capture.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  commit_and_push.sh  —  OlsveredKFAC Git Commit & Push (Linux / Runpod)
+#  commit_and_push.sh  —  OlsSMKFAC Git Commit & Push (Linux / Runpod)
 # =============================================================================
 #  Usage:
 #    bash scripts/commit_and_push.sh
@@ -16,7 +16,7 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 MSG="${1:-}"
 
 echo ""
-echo -e "${CYAN}=== OlsveredKFAC Git Commit & Push ===${NC}"
+echo -e "${CYAN}=== OlsSMKFAC Git Commit & Push ===${NC}"
 echo ""
 
 # ── Step 1: Clear stale index.lock ────────────────────────────────────────────
@@ -39,7 +39,7 @@ FILES=(
     "benchmark/theoretical_analysis.py"
     "benchmark/results/"
     "optimizer/hooks.py"
-    "optimizer/olsvered_kfac.py"
+    "optimizer/olssm_kfac.py"
     "optimizer/classic_kfac.py"
     "run_benchmark.sh"
     "scripts/"

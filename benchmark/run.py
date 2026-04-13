@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Main benchmark script — compares Adam, ClassicKFAC, and OlsveredKFAC.
+Main benchmark script — compares Adam, ClassicKFAC, and OlsSMKFAC.
 
 Usage:
     python benchmark/run.py --optimizer adam --steps 200 --model transformer
-    python benchmark/run.py --optimizer olsvered_kfac --steps 200 --model transformer
+    python benchmark/run.py --optimizer olssm_kfac --steps 200 --model transformer
     python benchmark/run.py --optimizer classic_kfac --steps 200 --model transformer
     python benchmark/run.py --all --steps 200   # run all three and compare
 
@@ -30,14 +30,12 @@ from benchmark.data import get_synthetic_lm_loader, SyntheticClassificationData
 from benchmark.metrics import BenchmarkResult, Timer
 from optimizer.backend import get_backend_name
 
-
 def set_seed(seed: int):
     """Set all random seeds for reproducibility."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
 
 def create_model(model_name: str, device: torch.device) -> nn.Module:
     """Create model by name."""
@@ -52,15 +50,14 @@ def create_model(model_name: str, device: torch.device) -> nn.Module:
         raise ValueError(f"Unknown model: {model_name}")
     return model.to(device)
 
-
 def create_optimizer(opt_name: str, model: nn.Module, lr: float,
                      damping: float, factor_freq: int, momentum: float):
     """Create optimizer by name."""
     if opt_name == "adam":
         return torch.optim.Adam(model.parameters(), lr=lr)
-    elif opt_name == "olsvered_kfac":
-        from optimizer.olsvered_kfac import OlsveredKFAC
-        return OlsveredKFAC(
+    elif opt_name == "olssm_kfac":
+        from optimizer.olssm_kfac import OlsSMKFAC
+        return OlsSMKFAC(
             model, lr=lr, damping=damping,
             factor_update_freq=factor_freq,
             inv_update_freq=factor_freq,
@@ -76,7 +73,6 @@ def create_optimizer(opt_name: str, model: nn.Module, lr: float,
         )
     else:
         raise ValueError(f"Unknown optimizer: {opt_name}")
-
 
 def train_transformer(
     model: nn.Module,
@@ -96,7 +92,7 @@ def train_transformer(
     )
     data_iter = iter(loader)
 
-    backend = get_backend_name() if "olsvered" in opt_name else (
+    backend = get_backend_name() if "olssm" in opt_name else (
         "torch.linalg.inv" if "classic" in opt_name else "adam (first-order)"
     )
 
@@ -172,7 +168,6 @@ def train_transformer(
 
     return result
 
-
 def run_benchmark(args):
     """Run a single benchmark configuration."""
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
@@ -230,11 +225,10 @@ def run_benchmark(args):
 
     return result
 
-
 def run_all(args):
     """Run all three optimizers and print comparison."""
     results = {}
-    for opt in ["adam", "classic_kfac", "olsvered_kfac"]:
+    for opt in ["adam", "classic_kfac", "olssm_kfac"]:
         args.optimizer = opt
         # Use appropriate LR defaults
         if opt == "adam":
@@ -258,12 +252,11 @@ def run_all(args):
               f"{s['p99_step_ms']:>7.1f}ms")
     print()
 
-
 def main():
-    parser = argparse.ArgumentParser(description="olsvered K-FAC Benchmark")
+    parser = argparse.ArgumentParser(description="olssm K-FAC Benchmark")
 
-    parser.add_argument("--optimizer", type=str, default="olsvered_kfac",
-                        choices=["adam", "classic_kfac", "olsvered_kfac"],
+    parser.add_argument("--optimizer", type=str, default="olssm_kfac",
+                        choices=["adam", "classic_kfac", "olssm_kfac"],
                         help="Optimizer to benchmark")
     parser.add_argument("--model", type=str, default="transformer",
                         choices=["transformer", "mlp"],
@@ -297,7 +290,6 @@ def main():
         run_all(args)
     else:
         run_benchmark(args)
-
 
 if __name__ == "__main__":
     main()

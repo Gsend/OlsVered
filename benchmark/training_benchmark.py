@@ -1,5 +1,5 @@
 """
-Training benchmark: Adam vs ClassicKFAC vs OlsveredKFAC
+Training benchmark: Adam vs ClassicKFAC vs OlsSMKFAC
 ========================================================
 
 Trains a 4-layer MLP on MNIST and compares:
@@ -37,7 +37,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from optimizer.olsvered_kfac import OlsveredKFAC
+from optimizer.olssm_kfac import OlsSMKFAC
 from optimizer.classic_kfac import ClassicKFAC
 
 # ── Reproducibility ───────────────────────────────────────────────────────────
@@ -58,7 +58,6 @@ RESULTS_DIR  = ROOT / "benchmark" / "results"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
 
-
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 class MLP(nn.Module):
@@ -77,7 +76,6 @@ class MLP(nn.Module):
         x = F.relu(self.fc3(x))
         return self.fc4(x)
 
-
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 def get_loaders():
@@ -93,7 +91,6 @@ def get_loaders():
     val_loader   = DataLoader(val_ds,   batch_size=512,        shuffle=False,
                               num_workers=0, pin_memory=(DEVICE.type == "cuda"))
     return train_loader, val_loader
-
 
 # ── Training loop ─────────────────────────────────────────────────────────────
 
@@ -226,7 +223,6 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
 
     return history
 
-
 # ── Optimizer factories ───────────────────────────────────────────────────────
 
 def make_adam(model):
@@ -246,8 +242,8 @@ def make_classic_kfac(model):
         grad_clip=KFAC_CLIP,
     )
 
-def make_olsvered_adaptive(model):
-    return OlsveredKFAC(
+def make_olssm_adaptive(model):
+    return OlsSMKFAC(
         model,
         lr=LR_KFAC,
         damping=5e-3,
@@ -260,8 +256,8 @@ def make_olsvered_adaptive(model):
         grad_clip=KFAC_CLIP,
     )
 
-def make_olsvered_rank32(model):
-    return OlsveredKFAC(
+def make_olssm_rank32(model):
+    return OlsSMKFAC(
         model,
         lr=LR_KFAC,
         damping=DAMPING,
@@ -272,7 +268,6 @@ def make_olsvered_rank32(model):
         momentum=0.0,
         grad_clip=KFAC_CLIP,
     )
-
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
@@ -289,8 +284,8 @@ def plot_results(all_results, results_dir):
         "Adam":              "#2196F3",
         "SGD+momentum":      "#9E9E9E",
         "ClassicKFAC":       "#F44336",
-        "OlsveredKFAC-adaptive": "#4CAF50",
-        "OlsveredKFAC-rank32":   "#FF9800",
+        "OlsSMKFAC-adaptive": "#4CAF50",
+        "OlsSMKFAC-rank32":   "#FF9800",
     }
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -321,7 +316,6 @@ def plot_results(all_results, results_dir):
     fig.savefig(path, dpi=150, bbox_inches="tight")
     print(f"\nPlot saved: {path}")
     plt.close()
-
 
 # ── Summary table ─────────────────────────────────────────────────────────────
 
@@ -373,7 +367,6 @@ def print_summary(all_results):
             ratio = adam_steps / res["steps_to_target"]
             print(f"  {res['name']} converged in {ratio:.1f}× fewer steps than Adam")
 
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -381,8 +374,8 @@ def main():
     train_loader, val_loader = get_loaders()
 
     configs = [
-        ("OlsveredKFAC-adaptive",   make_olsvered_adaptive),
-        ("OlsveredKFAC-rank32",     make_olsvered_rank32),
+        ("OlsSMKFAC-adaptive",   make_olssm_adaptive),
+        ("OlsSMKFAC-rank32",     make_olssm_rank32),
         ("ClassicKFAC",             make_classic_kfac),
         ("Adam",                    make_adam),
         ("SGD+momentum",            make_sgd),
@@ -402,7 +395,6 @@ def main():
 
     print_summary(all_results)
     plot_results(all_results, RESULTS_DIR)
-
 
 if __name__ == "__main__":
     main()

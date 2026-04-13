@@ -12,7 +12,6 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-
 @dataclass
 class StepMetrics:
     """Metrics for a single training step."""
@@ -23,13 +22,12 @@ class StepMetrics:
     lr: float
     grad_norm: Optional[float] = None
 
-
 @dataclass
 class BenchmarkResult:
     """Complete results for a single benchmark run."""
     model_name: str
     optimizer_name: str
-    backend: str              # "olsvered" or "torch.linalg.inv" or "adam"
+    backend: str              # "olssm" or "torch.linalg.inv" or "adam"
     total_steps: int
     total_time_s: float
     hyperparams: Dict
@@ -79,7 +77,6 @@ class BenchmarkResult:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
-
 
 class Timer:
     """Simple context-manager timer."""

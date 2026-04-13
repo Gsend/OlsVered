@@ -7,7 +7,7 @@ fn main() {
         .generate()
     {
         Ok(bindings) => {
-            bindings.write_to_file("include/olsvered.h");
+            bindings.write_to_file("include/olssm.h");
         }
         Err(e) => {
             // C header generation is optional — only needed for C/C++ consumers.

@@ -1,8 +1,7 @@
 //! Pure-Rust implementations of three closed-form OLS algorithms.
 //!
-//! Reference: "Solving The Ordinary Least Squares in Closed Form, Without
-//! Inversion or Normalization" — Vered Senderovich Madar & Sandra Batista.
-//! <https://arxiv.org/abs/2301.01854>
+//! Inversion or Normalization" —  Senderovich  & Sandra .
+//! <
 //!
 //! All functions operate on `nalgebra::DMatrix<f64>` / `DVector<f64>`.
 //! No PyO3 or FFI dependencies — this module is the pure mathematical core.
@@ -12,9 +11,9 @@ use thiserror::Error;
 // faer traits required for .solve() and .inverse() on PartialPivLu
 use faer::prelude::{SolverCore, SpSolver};
 
-/// Errors returned by olsvered algorithms.
+/// Errors returned by olssm algorithms.
 #[derive(Debug, Error, PartialEq)]
-pub enum OlsveredError {
+pub enum OlsSMError {
     /// Row count of X does not match length of y.
     #[error("Dimension mismatch: X has {x_rows} rows, y has {y_len} elements")]
     DimensionMismatch { x_rows: usize, y_len: usize },
@@ -52,17 +51,17 @@ pub enum OlsveredError {
 /// Pass to [`back_substitute`] to recover OLS coefficients.
 ///
 /// # Errors
-/// * [`OlsveredError::DimensionMismatch`] if `x.nrows() != y.len()`
-/// * [`OlsveredError::ZeroPivot`] if any diagonal of U is ≈ 0
+/// * [`OlsSMError::DimensionMismatch`] if `x.nrows() != y.len()`
+/// * [`OlsSMError::ZeroPivot`] if any diagonal of U is ≈ 0
 pub fn modified_cholesky(
     x: &DMatrix<f64>,
     y: &DVector<f64>,
-) -> Result<DMatrix<f64>, OlsveredError> {
+) -> Result<DMatrix<f64>, OlsSMError> {
     let n = x.nrows();
     let p = x.ncols();
 
     if n != y.len() {
-        return Err(OlsveredError::DimensionMismatch {
+        return Err(OlsSMError::DimensionMismatch {
             x_rows: n,
             y_len: y.len(),
         });
@@ -85,7 +84,7 @@ pub fn modified_cholesky(
     // in the column space of X (exact fit with no residuals) — this is valid.
     for i in 0..p {
         if u[(i, i)].abs() < f64::EPSILON * 1e6 {
-            return Err(OlsveredError::ZeroPivot { index: i });
+            return Err(OlsSMError::ZeroPivot { index: i });
         }
     }
 
@@ -123,7 +122,7 @@ pub fn modified_cholesky(
 ///
 /// # Returns
 /// `beta` — OLS coefficient vector of length `p`
-pub fn back_substitute(c: &DMatrix<f64>) -> Result<DVector<f64>, OlsveredError> {
+pub fn back_substitute(c: &DMatrix<f64>) -> Result<DVector<f64>, OlsSMError> {
     let dim = c.nrows(); // p + 1
     let mut betas = DVector::zeros(dim);
     betas[dim - 1] = -1.0;
@@ -156,7 +155,7 @@ pub fn back_substitute(c: &DMatrix<f64>) -> Result<DVector<f64>, OlsveredError> 
 pub fn solve_ols(
     x: &DMatrix<f64>,
     y: &DVector<f64>,
-) -> Result<DVector<f64>, OlsveredError> {
+) -> Result<DVector<f64>, OlsSMError> {
     let c = modified_cholesky(x, y)?;
     back_substitute(&c)
 }
@@ -180,7 +179,7 @@ pub fn solve_ols(
 ///
 /// # Returns
 /// `Q` — Matrix `(n, p)` with mutually orthogonal (un-normalised) columns
-pub fn simplified_gram_schmidt(x: &DMatrix<f64>) -> Result<DMatrix<f64>, OlsveredError> {
+pub fn simplified_gram_schmidt(x: &DMatrix<f64>) -> Result<DMatrix<f64>, OlsSMError> {
     let n = x.nrows();
     let p = x.ncols();
     let mut q = DMatrix::zeros(n, p);
@@ -222,16 +221,16 @@ pub fn simplified_gram_schmidt(x: &DMatrix<f64>) -> Result<DMatrix<f64>, Olsvere
 ///       For weighted OLS: `beta = G @ y`.
 ///
 /// # Errors
-/// * [`OlsveredError::WeightDimension`] if W is not `n×n`
-/// * [`OlsveredError::SingularMatrix`] if `XᵀWX` is singular
+/// * [`OlsSMError::WeightDimension`] if W is not `n×n`
+/// * [`OlsSMError::SingularMatrix`] if `XᵀWX` is singular
 pub fn weighted_generalized_inverse(
     x: &DMatrix<f64>,
     w: &DMatrix<f64>,
-) -> Result<DMatrix<f64>, OlsveredError> {
+) -> Result<DMatrix<f64>, OlsSMError> {
     let n = x.nrows();
 
     if w.nrows() != n || w.ncols() != n {
-        return Err(OlsveredError::WeightDimension {
+        return Err(OlsSMError::WeightDimension {
             n,
             rows: w.nrows(),
             cols: w.ncols(),
@@ -247,7 +246,7 @@ pub fn weighted_generalized_inverse(
     // Solve XᵀWX · G = Xᵀ W  for G, shape (p, n)
     // Equivalent to G = (XᵀWX)⁻¹ Xᵀ W without explicit inversion
     let lu = nalgebra::linalg::LU::new(xtwx);
-    let result = lu.solve(&xtw).ok_or(OlsveredError::SingularMatrix)?;
+    let result = lu.solve(&xtw).ok_or(OlsSMError::SingularMatrix)?;
 
     Ok(result)
 }
@@ -290,20 +289,20 @@ fn faer_to_nalgebra(m: faer::MatRef<f64>) -> DMatrix<f64> {
 /// Solution matrix `X` of shape `(p, k)` such that `gram · X ≈ rhs`.
 ///
 /// # Errors
-/// * [`OlsveredError::DimensionMismatch`] if row counts disagree
-/// * [`OlsveredError::SingularMatrix`]    if LU solve fails (singular matrix)
+/// * [`OlsSMError::DimensionMismatch`] if row counts disagree
+/// * [`OlsSMError::SingularMatrix`]    if LU solve fails (singular matrix)
 pub fn lu_solve_gram(
     gram: &DMatrix<f64>,
     rhs: &DMatrix<f64>,
-) -> Result<DMatrix<f64>, OlsveredError> {
+) -> Result<DMatrix<f64>, OlsSMError> {
     if gram.nrows() != gram.ncols() {
-        return Err(OlsveredError::DimensionMismatch {
+        return Err(OlsSMError::DimensionMismatch {
             x_rows: gram.nrows(),
             y_len: gram.ncols(),
         });
     }
     if gram.nrows() != rhs.nrows() {
-        return Err(OlsveredError::DimensionMismatch {
+        return Err(OlsSMError::DimensionMismatch {
             x_rows: gram.nrows(),
             y_len: rhs.nrows(),
         });
@@ -330,15 +329,15 @@ pub fn lu_solve_gram(
 pub fn lu_solve_gram_vec(
     gram: &DMatrix<f64>,
     rhs: &DVector<f64>,
-) -> Result<DVector<f64>, OlsveredError> {
+) -> Result<DVector<f64>, OlsSMError> {
     if gram.nrows() != gram.ncols() {
-        return Err(OlsveredError::DimensionMismatch {
+        return Err(OlsSMError::DimensionMismatch {
             x_rows: gram.nrows(),
             y_len: gram.ncols(),
         });
     }
     if gram.nrows() != rhs.len() {
-        return Err(OlsveredError::DimensionMismatch {
+        return Err(OlsSMError::DimensionMismatch {
             x_rows: gram.nrows(),
             y_len: rhs.len(),
         });
@@ -354,7 +353,7 @@ pub fn lu_solve_gram_vec(
 
 /// Compute the explicit inverse of a Gram matrix via faer LU factorisation.
 ///
-/// While `olsvered` philosophy favours direct solves over explicit inversion,
+/// While `olssm` philosophy favours direct solves over explicit inversion,
 /// K-FAC's natural gradient update `ΔW = G⁻¹ · ∇L · A⁻¹` requires the
 /// preconditioner be applied from both sides — making a cached explicit
 /// inverse worthwhile when `factor_update_freq > 1`.
@@ -369,10 +368,10 @@ pub fn lu_solve_gram_vec(
 /// `gram⁻¹` — Inverse matrix of shape `(p, p)`
 ///
 /// # Errors
-/// * [`OlsveredError::SingularMatrix`] if the matrix is singular
-pub fn lu_inverse_gram(gram: &DMatrix<f64>) -> Result<DMatrix<f64>, OlsveredError> {
+/// * [`OlsSMError::SingularMatrix`] if the matrix is singular
+pub fn lu_inverse_gram(gram: &DMatrix<f64>) -> Result<DMatrix<f64>, OlsSMError> {
     if gram.nrows() != gram.ncols() {
-        return Err(OlsveredError::DimensionMismatch {
+        return Err(OlsSMError::DimensionMismatch {
             x_rows: gram.nrows(),
             y_len: gram.ncols(),
         });
@@ -388,7 +387,7 @@ pub fn lu_inverse_gram(gram: &DMatrix<f64>) -> Result<DMatrix<f64>, OlsveredErro
 // ---------------------------------------------------------------------------
 // Fast f32 path — zero-overhead K-FAC inversion for production use
 //
-// `lu_damped_inverse_f32` is the hot path used by OlsveredKFAC at runtime:
+// `lu_damped_inverse_f32` is the hot path used by OlsSMKFAC at runtime:
 //   1. Accepts a **row-major f32 slice** — matches PyTorch's default memory
 //      layout so no dtype conversion is needed on the Python side.
 //   2. Adds Tikhonov damping λI directly inside Rust — one fewer numpy

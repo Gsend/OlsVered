@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ---------------------------------------------------------------------------
 # Small GPT-style Transformer (all-Linear, K-FAC friendly)
 # ---------------------------------------------------------------------------
@@ -66,7 +65,6 @@ class TransformerBlock(nn.Module):
         # FFN
         x = x + self.ffn(self.ln2(x))
         return x
-
 
 class SmallTransformer(nn.Module):
     """Minimal GPT-style language model for benchmarking.
@@ -143,7 +141,6 @@ class SmallTransformer(nn.Module):
 
     def count_linear_layers(self) -> int:
         return sum(1 for m in self.modules() if isinstance(m, nn.Linear))
-
 
 # ---------------------------------------------------------------------------
 # Simple MLP for fast smoke tests

@@ -1,7 +1,7 @@
 """
 Classical K-FAC optimizer using torch.linalg.inv for Gram matrix inversion.
 
-This is the CONTROL implementation — identical to OlsveredKFAC in every way
+This is the CONTROL implementation — identical to OlsSMKFAC in every way
 except the inversion method. This ensures the benchmark compares inversion
 strategies, not implementation differences.
 
@@ -18,11 +18,10 @@ from collections import deque
 
 from optimizer.hooks import KFACHooks
 
-
 class ClassicKFAC(torch.optim.Optimizer):
     """K-FAC optimizer with classical torch.linalg.inv backend.
 
-    Same interface and logic as OlsveredKFAC — only the inversion differs.
+    Same interface and logic as OlsSMKFAC — only the inversion differs.
 
     Parameters
     ----------

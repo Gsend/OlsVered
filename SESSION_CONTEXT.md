@@ -1,15 +1,15 @@
-# OlsveredKFAC Session Context
+# OlsSMKFAC Session Context
 *Saved: 2026-04-13*
 
 ---
 
 ## Project Overview
-OlsveredKFAC is a K-FAC (Kronecker-Factored Approximate Curvature) optimizer using a randomized EVD backend. It is benchmarked against ClassicKFAC and Adam across four tasks: Large MLP (MNIST), CIFAR-10 MLP, BERT fine-tuning (SST-2), and SmallGPT from scratch (WikiText-2).
+OlsSMKFAC is a K-FAC (Kronecker-Factored Approximate Curvature) optimizer using a randomized EVD backend. It is benchmarked against ClassicKFAC and Adam across four tasks: Large MLP (MNIST), CIFAR-10 MLP, BERT fine-tuning (SST-2), and SmallGPT from scratch (WikiText-2).
 
-**Repo root:** `C:/Users/nat79/OlsVered/`
+**Repo root:** `C:/Users/nat79/OlsSM/`
 **Key files:**
 - `optimizer/hooks.py` — forward/backward hooks, KFAC-Reduce subsampling
-- `optimizer/olsvered_kfac.py` — main optimizer
+- `optimizer/olssm_kfac.py` — main optimizer
 - `optimizer/classic_kfac.py` — baseline
 - `benchmark/gpu_benchmark.py` — all 4 benchmark tasks
 - `run_benchmark.sh` — launcher with CLI args
@@ -43,7 +43,7 @@ def __init__(self, model: nn.Module, max_gram_dim: int = 0):
             self._linear_layers.append(module)
 ```
 
-### 2. `optimizer/olsvered_kfac.py`
+### 2. `optimizer/olssm_kfac.py`
 - Added `max_gram_dim: int = 0` parameter, passed to `KFACHooks(model, max_gram_dim=max_gram_dim)`
 - Added `kfac_state_dict()` and `load_kfac_state_dict()` methods for checkpoint warm-start
 
@@ -53,7 +53,7 @@ def __init__(self, model: nn.Module, max_gram_dim: int = 0):
 ### 4. `benchmark/gpu_benchmark.py`
 
 #### Transformer task — dual optimizer fix (CRITICAL)
-OlsveredKFAC only registers `nn.Linear`/`nn.Conv2d` in param groups and only updates those in `step()`. `nn.Embedding` layers (tok_emb, pos_emb) were never updated → model stuck at ppl=9999.
+OlsSMKFAC only registers `nn.Linear`/`nn.Conv2d` in param groups and only updates those in `step()`. `nn.Embedding` layers (tok_emb, pos_emb) were never updated → model stuck at ppl=9999.
 
 **Fix:** Dual optimizer — K-FAC for Linear layers, AdamW for embeddings + LayerNorm + excluded LM head:
 ```python
@@ -72,14 +72,14 @@ Training loop uses `model.zero_grad()` (not `opt.zero_grad()`) to clear ALL para
 
 #### Transformer task — LR optimization CLI args (new)
 ```
---lr-ols-transformer LR    Override OlsveredKFAC lr (default 3e-3)
+--lr-ols-transformer LR    Override OlsSMKFAC lr (default 3e-3)
 --lr-cls-transformer LR    Override ClassicKFAC lr (default 3e-3)
 --lr-sweep-transformer     Auto-sweep [1e-3, 3e-3, 5e-3, 8e-3] for each K-FAC optimizer
 ```
 
 #### BERT task changes
-- Configs reordered: Adam → OlsveredKFAC → ClassicKFAC
-- OlsveredKFAC BERT params: `lr=3e-3, damping=3e-3, factor_update_freq=20, inv_update_freq=5, adaptive=True, adaptive_min_n=256, adaptive_rank_budget=128, momentum=0.0, grad_clip=1.0, gamma=0.95`
+- Configs reordered: Adam → OlsSMKFAC → ClassicKFAC
+- OlsSMKFAC BERT params: `lr=3e-3, damping=3e-3, factor_update_freq=20, inv_update_freq=5, adaptive=True, adaptive_min_n=256, adaptive_rank_budget=128, momentum=0.0, grad_clip=1.0, gamma=0.95`
 - Threshold-triggered LR decay at `val_acc >= 0.91`: replaces scheduler with `CosineAnnealingLR(T_max=remaining_steps)`, drops damping to `2e-4`
 - Checkpoint save/load: files `bert_ckpt_{name}_{model|opt|kfac|meta}.pt`
 - `max_steps_bert` default: 8000 → 5000
@@ -106,17 +106,17 @@ Added CLI args:
 | Optimizer | Wall | Final PPL | Opt ms |
 |-----------|------|-----------|--------|
 | Adam | 3.2 min | 1,079 | 0.4 |
-| OlsveredKFAC | 6.3 min | **682** | 45.1 |
+| OlsSMKFAC | 6.3 min | **682** | 45.1 |
 | ClassicKFAC | 5.2 min | 721 | 31.0 |
 
-**K-FAC wins at equal wall time:** at 3 min, OlsveredKFAC ppl=863 vs Adam ppl=1,079.
-**LR optimization pending** — `--lr-sweep-transformer` implemented but not yet run. Suspected optimal: OlsveredKFAC ~5e-3, ClassicKFAC ~4e-3.
+**K-FAC wins at equal wall time:** at 3 min, OlsSMKFAC ppl=863 vs Adam ppl=1,079.
+**LR optimization pending** — `--lr-sweep-transformer` implemented but not yet run. Suspected optimal: OlsSMKFAC ~5e-3, ClassicKFAC ~4e-3.
 
 ### Task 2: BERT Fine-tuning / SST-2
 | Optimizer | Wall | Final Acc | Notes |
 |-----------|------|-----------|-------|
 | Adam | 5.0 min | **93.0%** | Canonical recipe, peak 93.12% |
-| OlsveredKFAC | ~7 min | ~91% | No result JSON (from session log) |
+| OlsSMKFAC | ~7 min | ~91% | No result JSON (from session log) |
 | ClassicKFAC | 55.4 min | 85.9% | ⚠ STALE — pre-hooks-fix run (221ms/step) |
 
 **Adam wins on fine-tuning.** ClassicKFAC needs re-run with fixed hooks (expected ~15ms/step).
@@ -126,14 +126,14 @@ Added CLI args:
 | Optimizer | Final Acc |
 |-----------|-----------|
 | Adam | 57.9% |
-| OlsveredKFAC | 55.4% |
+| OlsSMKFAC | 55.4% |
 | ClassicKFAC | 51.4% |
 
 ### Task 4: Large MLP (MNIST)
 | Optimizer | Final Acc |
 |-----------|-----------|
 | Adam | **98.7%** |
-| OlsveredKFAC | 97.6% |
+| OlsSMKFAC | 97.6% |
 | ClassicKFAC | 97.7% |
 
 ---
@@ -142,7 +142,7 @@ Added CLI args:
 
 1. **K-FAC shines on from-scratch training** (rough landscape) — confirmed on SmallGPT.
 2. **Adam wins on fine-tuning** (smooth landscape near pre-trained weights) — confirmed on BERT.
-3. **K-FAC step cost:** OlsveredKFAC 45ms vs Adam 0.4ms (100×). Break-even requires ~2-3× better loss-per-sample.
+3. **K-FAC step cost:** OlsSMKFAC 45ms vs Adam 0.4ms (100×). Break-even requires ~2-3× better loss-per-sample.
 4. **Embedding layers must use AdamW** when training from scratch — K-FAC only covers Linear/Conv2d.
 5. **LM head with vocab_size output must be excluded from K-FAC** (`max_gram_dim=4096`) to avoid OOM (50,257×50,257 G matrix ≈ 10 GB).
 
@@ -158,12 +158,12 @@ Added CLI args:
 2. **Re-run BERT ClassicKFAC** with fixed hooks (delete stale checkpoint first):
    ```bash
    rm benchmark/results/bert_ckpt_classickfac_*.pt
-   bash run_benchmark.sh --task bert --skip adam,olsveredkfac
+   bash run_benchmark.sh --task bert --skip adam,olssmkfac
    ```
 
-3. **Re-run BERT OlsveredKFAC** clean to get a result JSON:
+3. **Re-run BERT OlsSMKFAC** clean to get a result JSON:
    ```bash
-   rm benchmark/results/bert_ckpt_olsveredkfac_*.pt
+   rm benchmark/results/bert_ckpt_olssmkfac_*.pt
    bash run_benchmark.sh --task bert --skip adam,classickfac
    ```
 
@@ -196,7 +196,7 @@ Added CLI args:
 | MLP/CIFAR | 4 GB |
 | SmallGPT transformer | 10 GB |
 | BERT Adam | 6 GB |
-| BERT OlsveredKFAC B=512 | 16 GB |
+| BERT OlsSMKFAC B=512 | 16 GB |
 | BERT ClassicKFAC B=512 | 32 GB |
 | Full benchmark | 32 GB |
 

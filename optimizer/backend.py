@@ -1,7 +1,7 @@
 """
 Backend abstraction for Gram matrix operations.
 
-Tries to import the compiled olsvered Rust module first.
+Tries to import the compiled olssm Rust module first.
 Falls back to numpy-based implementations that are API-compatible.
 This allows development and benchmarking without a Rust compiler,
 while seamlessly using the Rust backend when available.
@@ -14,12 +14,11 @@ from scipy import linalg as sp_linalg
 # Try importing the compiled Rust module
 # ---------------------------------------------------------------------------
 try:
-    import olsvered as _rust_backend
+    import olssm as _rust_backend
 
     _HAS_RUST = True
 except ImportError:
     _HAS_RUST = False
-
 
 # ---------------------------------------------------------------------------
 # Numpy fallback implementations
@@ -36,13 +35,11 @@ def _np_lu_solve_gram(gram: np.ndarray, rhs: np.ndarray) -> np.ndarray:
         result[:, j] = sp_linalg.lu_solve((lu, piv), rhs[:, j])
     return result
 
-
 def _np_lu_inverse_gram(gram: np.ndarray) -> np.ndarray:
     """Compute gram⁻¹ via LU factorisation (scipy)."""
     lu, piv = sp_linalg.lu_factor(gram)
     identity = np.eye(gram.shape[0])
     return sp_linalg.lu_solve((lu, piv), identity)
-
 
 # ---------------------------------------------------------------------------
 # Public API — dispatches to Rust or numpy
@@ -51,7 +48,7 @@ def _np_lu_inverse_gram(gram: np.ndarray) -> np.ndarray:
 def lu_solve_gram(gram: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     """Solve gram @ X = rhs via LU factorisation.
 
-    Uses the compiled olsvered Rust backend if available,
+    Uses the compiled olssm Rust backend if available,
     otherwise falls back to scipy.linalg.lu_factor/lu_solve.
 
     Parameters
@@ -78,11 +75,10 @@ def lu_solve_gram(gram: np.ndarray, rhs: np.ndarray) -> np.ndarray:
         )
     return _np_lu_solve_gram(gram.astype(np.float64), rhs.astype(np.float64))
 
-
 def lu_inverse_gram(gram: np.ndarray) -> np.ndarray:
     """Compute gram⁻¹ via LU factorisation.
 
-    Uses the compiled olsvered Rust backend if available,
+    Uses the compiled olssm Rust backend if available,
     otherwise falls back to scipy.linalg.lu_factor/lu_solve.
 
     Parameters
@@ -101,11 +97,10 @@ def lu_inverse_gram(gram: np.ndarray) -> np.ndarray:
         )
     return _np_lu_inverse_gram(gram.astype(np.float64))
 
-
 def lu_damped_inverse_f32(gram: np.ndarray, damping: float) -> np.ndarray:
     """Compute ``(gram + damping·I)⁻¹`` on f32 data — fast path for K-FAC.
 
-    Uses the compiled olsvered Rust backend if available (zero dtype cast,
+    Uses the compiled olssm Rust backend if available (zero dtype cast,
     damping applied inside Rust, only 2 copies vs 6+).
     Falls back to scipy on float64 when Rust is unavailable.
 
@@ -128,7 +123,6 @@ def lu_damped_inverse_f32(gram: np.ndarray, damping: float) -> np.ndarray:
     n = g64.shape[0]
     g64 += damping * np.eye(n)
     return _np_lu_inverse_gram(g64).astype(gram.dtype)
-
 
 def eigh_f32(gram: np.ndarray, damping: float):
     """Symmetric eigendecomposition of a Gram matrix — fast K-FAC path.
@@ -159,7 +153,6 @@ def eigh_f32(gram: np.ndarray, damping: float):
     eigenvalues, q = np.linalg.eigh(g64)
     inv_lam = (1.0 / np.maximum(eigenvalues + damping, 1e-8)).astype(np.float32)
     return q.astype(np.float32), inv_lam
-
 
 def apply_kfac_eigen_f32(
     q_g: np.ndarray, inv_lam_g: np.ndarray,
@@ -194,7 +187,6 @@ def apply_kfac_eigen_f32(
     tmp = tmp * np.outer(inv_lam_g, inv_lam_a)
     return (q_g @ tmp @ q_a.T)
 
-
 def eigh_topk_f32(gram: np.ndarray, k: int, damping: float):
     """Low-rank symmetric EVD: top-k eigenvectors and damped inverse eigenvalues.
 
@@ -226,7 +218,6 @@ def eigh_topk_f32(gram: np.ndarray, k: int, damping: float):
     inv_lam_k = (1.0 / np.maximum(eigenvalues[top_k_idx] + damping, 1e-8)).astype(np.float32)
     q_k = q[:, top_k_idx].astype(np.float32)
     return q_k, inv_lam_k
-
 
 def apply_kfac_lowrank_f32(
     q_g_k: np.ndarray, inv_lam_g_k: np.ndarray,
@@ -260,7 +251,6 @@ def apply_kfac_lowrank_f32(
     tmp = q_g_k.T @ grad.astype(np.float32) @ q_a_k        # (k_g × k_a)
     tmp = tmp * np.outer(inv_lam_g_k, inv_lam_a_k)
     return (q_g_k @ tmp @ q_a_k.T)                         # (d_out × d_in)
-
 
 def randomized_eigh_f32(gram: np.ndarray, k: int, n_iter: int = 1, damping: float = 0.0):
     """Randomized symmetric EVD — approximate top-k eigenvectors in O(k·n²).
@@ -298,7 +288,6 @@ def randomized_eigh_f32(gram: np.ndarray, k: int, n_iter: int = 1, damping: floa
     q_k = q[:, -k:].astype(np.float32)
     return q_k, inv_lam_k
 
-
 def get_backend_name() -> str:
     """Return the name of the active backend."""
-    return "olsvered (Rust)" if _HAS_RUST else "numpy/scipy (fallback)"
+    return "olssm (Rust)" if _HAS_RUST else "numpy/scipy (fallback)"

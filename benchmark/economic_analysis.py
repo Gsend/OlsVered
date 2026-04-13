@@ -1,8 +1,8 @@
 """
-OlsveredKFAC Economic Analysis
+OlsSMKFAC Economic Analysis
 ===============================
 Estimates GPU-hours, electricity cost, cloud cost, and carbon footprint
-for training realistic large models with Adam, ClassicKFAC, and OlsveredKFAC.
+for training realistic large models with Adam, ClassicKFAC, and OlsSMKFAC.
 
 Literature sources for K-FAC step advantage:
   - Osawa et al. CVPR 2019: K-FAC converges ResNet-50/ImageNet 18-25% faster than SGD
@@ -38,13 +38,13 @@ CO2_kg_per_kWh  = 0.386         # US grid average kg CO2 / kWh
 
 # ─── Optimizer per-step overhead multipliers ──────────────────────────────
 # Relative to pure fwd+bwd pass (which = 1.0).
-# Based on our FLOP analysis: OlsveredKFAC 1.5-3× Adam overhead,
+# Based on our FLOP analysis: OlsSMKFAC 1.5-3× Adam overhead,
 # ClassicKFAC 5-8× Adam overhead, at B=512, large layers.
 # Adam overhead is ~5% of fwd+bwd on GPU (negligible).
 OVERHEAD = {
     "Adam":             1.05,   # essentially fwd+bwd only
     "ClassicKFAC":      2.80,   # ~2.8× total step time vs Adam  (our analysis: 2-3.3×)
-    "OlsveredKFAC":     1.55,   # ~1.55× total step time vs Adam (our analysis: 1.5-2.2×)
+    "OlsSMKFAC":     1.55,   # ~1.55× total step time vs Adam (our analysis: 1.5-2.2×)
 }
 
 # ─── K-FAC step reduction vs Adam (from literature, conservative) ─────────
@@ -58,7 +58,7 @@ STEP_REDUCTION = {
     "GPT-2 Med / fine-tune (ppl target)":      0.72,   # interpolated, conservative
     "ViT-B/16 / ImageNet (81% top-1)":         0.75,   # conservative estimate
 }
-# Note: ClassicKFAC has the same step reduction as OlsveredKFAC
+# Note: ClassicKFAC has the same step reduction as OlsSMKFAC
 # (same update direction, only EVD method differs).
 
 # ─── Training scenarios ───────────────────────────────────────────────────
@@ -142,12 +142,12 @@ def compute_scenario(scenario, optimizer, hw_key=DEFAULT_HW):
 # ─── Run all scenarios ────────────────────────────────────────────────────
 results = []
 for sc in SCENARIOS:
-    for opt in ["Adam", "ClassicKFAC", "OlsveredKFAC"]:
+    for opt in ["Adam", "ClassicKFAC", "OlsSMKFAC"]:
         results.append(compute_scenario(sc, opt))
 
 # ─── Print summary tables ─────────────────────────────────────────────────
 print("=" * 110)
-print("  OLSVEREDKFAC ECONOMIC ANALYSIS — Training Cost Comparison")
+print("  OLSSMKFAC ECONOMIC ANALYSIS — Training Cost Comparison")
 print("  All scenarios at B=512  |  Hardware: A100 80GB  |  Cloud: $2.21/GPU-hr")
 print("=" * 110)
 
@@ -160,7 +160,7 @@ for model in models_list:
     print(f"  │  {'Optimizer':<18}  {'Steps':>8}  {'Wall hrs':>9}  {'GPU-hrs':>8}  "
           f"{'Cloud $':>9}  {'kWh':>8}  {'CO₂ kg':>8}  {'vs Adam':>8}")
     print(f"  │  {'':─<18}  {'':─<8}  {'':─<9}  {'':─<8}  {'':─<9}  {'':─<8}  {'':─<8}  {'':─<8}")
-    for opt in ["Adam", "ClassicKFAC", "OlsveredKFAC"]:
+    for opt in ["Adam", "ClassicKFAC", "OlsSMKFAC"]:
         r = rows[opt]
         ratio = r["cloud_cost"] / rows["Adam"]["cloud_cost"]
         tag = "" if opt == "Adam" else f"({ratio:.2f}×)"
@@ -170,7 +170,7 @@ for model in models_list:
 
 # ─── Aggregate savings across all scenarios ───────────────────────────────
 print(f"\n\n{'=' * 110}")
-print("  AGGREGATE SAVINGS vs ClassicKFAC  (what you get by switching to OlsveredKFAC)")
+print("  AGGREGATE SAVINGS vs ClassicKFAC  (what you get by switching to OlsSMKFAC)")
 print("=" * 110)
 print(f"  {'Model':<28}  {'Cl cost':>10}  {'Ol cost':>10}  "
       f"{'$ saved':>10}  {'Time saved':>11}  {'kWh saved':>10}  {'CO₂ saved kg':>12}")
@@ -180,7 +180,7 @@ total_cl_cost = total_ol_cost = total_cl_kwh = total_ol_kwh = 0
 total_cl_h = total_ol_h = 0
 for model in models_list:
     rows = {r["optimizer"]: r for r in results if r["model"] == model}
-    cl = rows["ClassicKFAC"]; ol = rows["OlsveredKFAC"]
+    cl = rows["ClassicKFAC"]; ol = rows["OlsSMKFAC"]
     total_cl_cost += cl["cloud_cost"]; total_ol_cost += ol["cloud_cost"]
     total_cl_kwh  += cl["kwh"];        total_ol_kwh  += ol["kwh"]
     total_cl_h    += cl["wall_h"];     total_ol_h    += ol["wall_h"]
@@ -226,18 +226,18 @@ for task, adam_r, kfac_r, verdict in evidence:
 # ─── Generate plots ────────────────────────────────────────────────────────
 fig, axes = plt.subplots(2, 3, figsize=(18, 11))
 fig.patch.set_facecolor("#f8f9fa")
-fig.suptitle("OlsveredKFAC Economic Analysis\n"
+fig.suptitle("OlsSMKFAC Economic Analysis\n"
              "Training cost at B=512 · A100 GPU · $2.21/hr · $0.11/kWh",
              fontsize=13, fontweight="bold")
 
-COLORS = {"Adam": "#7f8c8d", "ClassicKFAC": "#c0392b", "OlsveredKFAC": "#2980b9"}
+COLORS = {"Adam": "#7f8c8d", "ClassicKFAC": "#c0392b", "OlsSMKFAC": "#2980b9"}
 short_models = ["ResNet-50", "BERT-base\npre-train", "BERT-Large\nfine-tune",
                 "GPT-2 Med\nfine-tune", "ViT-B/16"]
 
 def bars(ax, metric_fn, ylabel, title, fmt=",.0f", prefix=""):
     x = np.arange(len(models_list))
     w = 0.26
-    for i, opt in enumerate(["Adam", "ClassicKFAC", "OlsveredKFAC"]):
+    for i, opt in enumerate(["Adam", "ClassicKFAC", "OlsSMKFAC"]):
         vals = [metric_fn({r["optimizer"]: r for r in results if r["model"] == m}[opt])
                 for m in models_list]
         bars_ = ax.bar(x + (i-1)*w, vals, w, label=opt, color=COLORS[opt], alpha=0.88)
@@ -253,18 +253,18 @@ bars(axes[0,0], lambda r: r["wall_h"],    "Hours",    "Wall-Clock Training Time 
 bars(axes[0,1], lambda r: r["cloud_cost"],"USD",      "Cloud Compute Cost ($)", prefix="$")
 bars(axes[0,2], lambda r: r["kwh"],       "kWh",      "Electricity Consumed (kWh)")
 
-# Savings: ClassicKFAC vs OlsveredKFAC
+# Savings: ClassicKFAC vs OlsSMKFAC
 ax = axes[1,0]
 rows_by_model = [{r["optimizer"]: r for r in results if r["model"] == m} for m in models_list]
-savings_cost = [d["ClassicKFAC"]["cloud_cost"] - d["OlsveredKFAC"]["cloud_cost"] for d in rows_by_model]
-savings_kwh  = [d["ClassicKFAC"]["kwh"]        - d["OlsveredKFAC"]["kwh"]        for d in rows_by_model]
-savings_h    = [d["ClassicKFAC"]["wall_h"]      - d["OlsveredKFAC"]["wall_h"]     for d in rows_by_model]
+savings_cost = [d["ClassicKFAC"]["cloud_cost"] - d["OlsSMKFAC"]["cloud_cost"] for d in rows_by_model]
+savings_kwh  = [d["ClassicKFAC"]["kwh"]        - d["OlsSMKFAC"]["kwh"]        for d in rows_by_model]
+savings_h    = [d["ClassicKFAC"]["wall_h"]      - d["OlsSMKFAC"]["wall_h"]     for d in rows_by_model]
 x = np.arange(len(models_list))
 b1 = ax.bar(x, savings_cost, color="#27ae60", alpha=0.88)
 for bar, v in zip(b1, savings_cost):
     ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()*1.02,
             f"${v:,.0f}", ha="center", fontsize=8, fontweight="bold")
-ax.set_title("$ Saved vs ClassicKFAC\n(switching to OlsveredKFAC)", fontweight="bold", fontsize=10)
+ax.set_title("$ Saved vs ClassicKFAC\n(switching to OlsSMKFAC)", fontweight="bold", fontsize=10)
 ax.set_ylabel("USD saved per training run", fontsize=9)
 ax.set_xticks(x); ax.set_xticklabels(short_models, fontsize=8)
 ax.grid(True, axis="y", alpha=0.3)
@@ -276,10 +276,10 @@ bars(axes[1,1], lambda r: r["co2_kg"], "kg CO₂", "Carbon Footprint (kg CO₂)"
 ax = axes[1,2]; ax.axis("off")
 adam_total  = sum(r["cloud_cost"] for r in results if r["optimizer"]=="Adam")
 cl_total    = sum(r["cloud_cost"] for r in results if r["optimizer"]=="ClassicKFAC")
-ol_total    = sum(r["cloud_cost"] for r in results if r["optimizer"]=="OlsveredKFAC")
+ol_total    = sum(r["cloud_cost"] for r in results if r["optimizer"]=="OlsSMKFAC")
 adam_kwh    = sum(r["kwh"]        for r in results if r["optimizer"]=="Adam")
 cl_kwh      = sum(r["kwh"]        for r in results if r["optimizer"]=="ClassicKFAC")
-ol_kwh      = sum(r["kwh"]        for r in results if r["optimizer"]=="OlsveredKFAC")
+ol_kwh      = sum(r["kwh"]        for r in results if r["optimizer"]=="OlsSMKFAC")
 
 summary = (
     f"SUMMARY (5 training runs total)\n"
@@ -288,15 +288,15 @@ summary = (
     f"{'─'*38}\n"
     f"{'Adam':<18} ${adam_total:>7,.0f}  {adam_kwh:>7.0f}\n"
     f"{'ClassicKFAC':<18} ${cl_total:>7,.0f}  {cl_kwh:>7.0f}\n"
-    f"{'OlsveredKFAC':<18} ${ol_total:>7,.0f}  {ol_kwh:>7.0f}\n"
+    f"{'OlsSMKFAC':<18} ${ol_total:>7,.0f}  {ol_kwh:>7.0f}\n"
     f"{'─'*38}\n"
-    f"\nOlsvered vs Classic:\n"
+    f"\nOlsSM vs Classic:\n"
     f"  Cost saving:  ${cl_total-ol_total:,.0f}  "
     f"({(cl_total-ol_total)/cl_total*100:.0f}%)\n"
     f"  Energy saving: {cl_kwh-ol_kwh:.0f} kWh  "
     f"({(cl_kwh-ol_kwh)/cl_kwh*100:.0f}%)\n"
     f"  CO₂ saving:   {(cl_kwh-ol_kwh)*CO2_kg_per_kWh:.0f} kg\n"
-    f"\nOlsvered vs Adam:\n"
+    f"\nOlsSM vs Adam:\n"
     f"  Adam is cheaper per run\n"
     f"  (K-FAC advantage = model quality\n"
     f"   + fewer steps on ill-conditioned\n"

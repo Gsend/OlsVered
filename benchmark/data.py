@@ -9,7 +9,6 @@ Provides synthetic and real data loaders:
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-
 class SyntheticLMData(Dataset):
     """Synthetic language modelling dataset — random token sequences.
 
@@ -44,7 +43,6 @@ class SyntheticLMData(Dataset):
         seq = self.data[idx]
         return seq[:-1], seq[1:]  # input, target (shifted by 1)
 
-
 def get_synthetic_lm_loader(
     num_samples: int = 10000,
     seq_len: int = 128,
@@ -57,7 +55,6 @@ def get_synthetic_lm_loader(
     pin = torch.cuda.is_available()
     return DataLoader(dataset, batch_size=batch_size, shuffle=True,
                       num_workers=0, pin_memory=pin)
-
 
 class SyntheticClassificationData(Dataset):
     """Synthetic classification dataset for MLP smoke tests."""

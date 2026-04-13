@@ -11,7 +11,7 @@ from reportlab.platypus import (
     PageBreak, HRFlowable
 )
 
-OUTPUT = "/Users/giladsenderovich/olsvered/OLS_in_Deep_Learning_Conversation.pdf"
+OUTPUT = "/Users/giladsenderovich/olssm/OLS_in_Deep_Learning_Conversation.pdf"
 
 def build_styles():
     ss = getSampleStyleSheet()
@@ -65,7 +65,6 @@ def build_styles():
     ))
     return ss
 
-
 def make_table(headers, rows, col_widths=None):
     """Build a styled Table from header list and row list."""
     s = getSampleStyleSheet()
@@ -95,11 +94,9 @@ def make_table(headers, rows, col_widths=None):
     ]))
     return t
 
-
 def hr():
     return HRFlowable(width="100%", thickness=0.5, color=HexColor("#cccccc"),
                        spaceBefore=8, spaceAfter=8)
-
 
 def build_pdf():
     doc = SimpleDocTemplate(
@@ -116,13 +113,12 @@ def build_pdf():
     story.append(Spacer(1, 60))
     story.append(Paragraph("OLS Algorithms in Deep Learning Training", s["DocTitle"]))
     story.append(Paragraph(
-        "A conversation exploring how the olsvered closed-form OLS algorithms<br/>"
+        "A conversation exploring how the olssm closed-form OLS algorithms<br/>"
         "can be applied to deep learning architectures", s["Subtitle"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph(
-        "Based on: <i>Solving The Ordinary Least Squares in Closed Form, Without "
-        "Inversion or Normalization</i><br/>Vered Senderovich Madar &amp; Sandra L. Batista "
-        "-- arXiv:2301.01854", s["Subtitle"]))
+                "Inversion or Normalization</i><br/> Senderovich  &amp; Sandra L.  "
+        "-- 
     story.append(Spacer(1, 12))
     story.append(Paragraph("March 2026", s["Subtitle"]))
     story.append(PageBreak())
@@ -149,7 +145,7 @@ def build_pdf():
     ))
     story.append(Spacer(1, 8))
 
-    story.append(Paragraph("1.2 How the 3 olsvered Algorithms Map", s["H2"]))
+    story.append(Paragraph("1.2 How the 3 olssm Algorithms Map", s["H2"]))
     story.append(make_table(
         ["Algorithm", "Best DL Use Case"],
         [
@@ -440,7 +436,7 @@ def build_pdf():
     # ══════════════════════════════════════════════════════════════════
     story.append(Paragraph("References", s["H1"]))
     refs = [
-        "Senderovich Madar, V. &amp; Batista, S. (2023). Solving The Ordinary Least Squares in Closed Form, Without Inversion or Normalization. arXiv:2301.01854.",
+        "Senderovich , V. &amp; , S. (2023). 
         "Galashov, A. et al. (2025). Closed-Form Last Layer Optimization. arXiv:2510.04606.",
         "Bertinetto, L. et al. (2019). Meta-Learning with Differentiable Closed-Form Solvers. ICLR 2019.",
         "Kumar, A. et al. (2024). Understanding Linear Probing then Fine-tuning. NeurIPS 2024.",
@@ -455,7 +451,6 @@ def build_pdf():
     # Build
     doc.build(story)
     print(f"PDF created: {OUTPUT}")
-
 
 if __name__ == "__main__":
     build_pdf()

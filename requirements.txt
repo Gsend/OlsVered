@@ -1,4 +1,4 @@
-# OlsVered — Python dependencies
+# OlsSM — Python dependencies
 # Install with:  pip install -r requirements.txt
    # needed for training_benchmark.py (MNIST download)
 
@@ -10,4 +10,4 @@ scipy>=1.10.0               # lu_factor / lu_solve fallback in backend.py
 matplotlib>=3.7.0
 
 # ── Rust build tooling (only needed if building the Rust extension from source)─
-# maturin>=1.0.0            # uncomment if building olsvered wheel locally
+# maturin>=1.0.0            # uncomment if building olssm wheel locally

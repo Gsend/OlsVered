@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  run_benchmark.sh  —  OlsveredKFAC GPU Benchmark launcher
+#  run_benchmark.sh  —  OlsSMKFAC GPU Benchmark launcher
 # =============================================================================
 #
 #  Usage:
@@ -15,13 +15,13 @@
 #                      transformer — Small GPT from scratch on WikiText-2 (~30-60 min)
 #                      all         — Run all tasks in sequence
 #    --skip          adam,classickfac,...    Comma-separated optimizers to skip
-#                    Valid names: adam, classickfac, olsveredkfac
+#                    Valid names: adam, classickfac, olssmkfac
 #    --steps-mlp     N                      Max steps for MLP task              (default: 3000)
 #    --steps-bert    N                      Max steps for BERT task             (default: 8000)
 #    --steps-cifar   N                      Max steps for CIFAR task            (default: 5000)
 #    --steps-scaling N                      Convergence steps per width/optimizer in
 #                                           scaling task                        (default: 300)
-#    --lr-ols-transformer LR               Override OlsveredKFAC lr in transformer task
+#    --lr-ols-transformer LR               Override OlsSMKFAC lr in transformer task
 #                                           (default: 3e-3). Example: --lr-ols-transformer 5e-3
 #    --lr-cls-transformer LR               Override ClassicKFAC lr in transformer task
 #                                           (default: 3e-3). Example: --lr-cls-transformer 5e-3

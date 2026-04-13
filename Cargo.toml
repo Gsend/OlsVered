@@ -1,12 +1,12 @@
 [package]
-name = "olsvered"
+name = "olssm"
 version = "0.1.0"
 edition = "2021"
-description = "Closed-form OLS without inversion or normalization"
+description = "SM K-FAC optimizer with fast Rust backend"
 license = "MIT"
 
 [lib]
-name = "olsvered"
+name = "olssm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

@@ -1,12 +1,12 @@
-# olsvered K-FAC Benchmark: Honest Results
+# olssm K-FAC Benchmark: Honest Results
 
 ## What We Tested
 
 We benchmarked three approaches to Gram matrix inversion — the core bottleneck in K-FAC and Shampoo second-order optimizers:
 
 1. **Classical inversion** (`numpy.linalg.inv`) — equivalent to `torch.linalg.inv`
-2. **LU-based inversion** (`scipy.linalg.lu_factor` + `lu_solve`) — the olsvered approach
-3. **LU direct solve** (no explicit inverse formed) — the ideal olsvered path
+2. **LU-based inversion** (`scipy.linalg.lu_factor` + `lu_solve`) — the olssm approach
+3. **LU direct solve** (no explicit inverse formed) — the ideal olssm path
 
 Tested on matrix dimensions matching real transformer layers (64–1024), across well-conditioned and near-singular Gram matrices, with damping values from 1e-2 to 1e-6.
 
@@ -43,9 +43,9 @@ Both methods produce identical or nearly identical accuracy. This is expected: w
 
 ---
 
-## Where olsvered's Value Actually Lies
+## Where olssm's Value Actually Lies
 
-The benchmark reveals that the advantage is NOT in raw Python/numpy speed — both call LAPACK under the hood. The real value of olsvered's Rust implementation is:
+The benchmark reveals that the advantage is NOT in raw Python/numpy speed — both call LAPACK under the hood. The real value of olssm's Rust implementation is:
 
 ### 1. Lower-level control
 nalgebra's LU with partial pivoting gives explicit access to pivot information, condition estimates, and factorization internals that numpy's `inv` hides. This enables adaptive damping strategies.
@@ -74,16 +74,16 @@ For a complete preconditioner update across 16 Linear layers (32 Gram matrices t
 
 ## Honest Assessment
 
-This benchmark shows that at the numpy/scipy level, olsvered's LU approach does not provide a dramatic speed advantage over classical inversion. Both methods use the same LAPACK primitives.
+This benchmark shows that at the numpy/scipy level, olssm's LU approach does not provide a dramatic speed advantage over classical inversion. Both methods use the same LAPACK primitives.
 
-**The case for olsvered in K-FAC rests on:**
+**The case for olssm in K-FAC rests on:**
 
 1. A compiled Rust backend that eliminates Python overhead in the hot path
 2. Architectural flexibility (direct solve vs cached inverse)
 3. Enabling lower damping → better curvature estimates → fewer training steps
 4. A clean, well-tested foundation for building second-order optimizer tooling
 
-**To prove the full value proposition, the next step must be an end-to-end training benchmark** on a real model, comparing Adam vs K-FAC with olsvered backend, measuring total wall-clock time to a target loss — not just inversion speed.
+**To prove the full value proposition, the next step must be an end-to-end training benchmark** on a real model, comparing Adam vs K-FAC with olssm backend, measuring total wall-clock time to a target loss — not just inversion speed.
 
 ---
 

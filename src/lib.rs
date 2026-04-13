@@ -1,13 +1,12 @@
-//! `olsvered` — Closed-form OLS without inversion or normalisation.
+//! `olssm` — Closed-form OLS without inversion or normalisation.
 //!
 //! Exposes three algorithms from:
-//! "Solving The Ordinary Least Squares in Closed Form, Without Inversion
-//! or Normalization" — Vered Senderovich Madar & Sandra Batista.
+//! or Normalization" —  Senderovich  & Sandra .
 //!
 //! # Usage
-//! - **Rust**: import `olsvered::algorithms::*` directly.
-//! - **Python**: `import olsvered` after `maturin develop` / `pip install`.
-//! - **C/C++**: link against `libolsvered` and include `olsvered.h`.
+//! - **Rust**: import `olssm::algorithms::*` directly.
+//! - **Python**: `import olssm` after `maturin develop` / `pip install`.
+//! - **C/C++**: link against `libolssm` and include `olssm.h`.
 
 pub mod algorithms;
 pub mod ffi;
@@ -506,7 +505,7 @@ mod python_bindings {
     // -----------------------------------------------------------------------
 
     #[pymodule]
-    pub fn olsvered(_py: Python, m: &PyModule) -> PyResult<()> {
+    pub fn olssm(_py: Python, m: &PyModule) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(modified_cholesky, m)?)?;
         m.add_function(wrap_pyfunction!(back_substitute, m)?)?;
         m.add_function(wrap_pyfunction!(solve_ols, m)?)?;
@@ -526,4 +525,4 @@ mod python_bindings {
 }
 
 #[cfg(feature = "python")]
-pub use python_bindings::olsvered;
+pub use python_bindings::olssm;

@@ -1,6 +1,6 @@
-"""olsvered optimiser suite — K-FAC with olsvered LU backend."""
+"""olssm optimiser suite — K-FAC with olssm LU backend."""
 
-from optimizer.olsvered_kfac import OlsveredKFAC
+from optimizer.olssm_kfac import OlsSMKFAC
 from optimizer.classic_kfac import ClassicKFAC
 
-__all__ = ["OlsveredKFAC", "ClassicKFAC"]
+__all__ = ["OlsSMKFAC", "ClassicKFAC"]

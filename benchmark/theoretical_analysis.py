@@ -1,6 +1,6 @@
 """
 Theoretical FLOP / Memory / Wall-Time comparison
-  Classical K-FAC  vs  OlsveredKFAC (randomised EVD rank-k)
+  Classical K-FAC  vs  OlsSMKFAC (randomised EVD rank-k)
 
 For a single linear layer  W : d_in → d_out
 and a mini-batch of size B, update frequency f, rank k.
@@ -11,7 +11,7 @@ Notation
   d_in     input  features of the layer
   d_out    output features of the layer
   f        factor+inverse update frequency (every f steps)
-  k        rank used by OlsveredKFAC
+  k        rank used by OlsSMKFAC
   p        oversampling in the randomised range-finder  (p=10)
   n_iter   power iterations in randomised EVD          (n_iter=2)
 
@@ -53,7 +53,7 @@ def flops_classic_apply(d_in, d_out):
     """G_inv @ grad_W @ A_inv  (two dense matmuls)."""
     return d_out**2 * d_in + d_out * d_in**2   # = d_in*d_out*(d_in+d_out)
 
-def flops_olsvered_apply(d_in, d_out, k):
+def flops_olssm_apply(d_in, d_out, k):
     """
     Q_G diag Q_G^T  grad_W  Q_A diag Q_A^T
     Four matmuls each O(k * d_in * d_out):
@@ -74,7 +74,7 @@ def mem_classic_extra(d_in, d_out):
     """A_inv + G_inv stored between updates."""
     return d_in**2 + d_out**2
 
-def mem_olsvered_extra(d_in, d_out, k):
+def mem_olssm_extra(d_in, d_out, k):
     """Q_A, lam_A, Q_G, lam_G stored between updates."""
     return k * (d_in + d_out) + 2 * k
 
@@ -108,7 +108,7 @@ def analyse_model(name, layers, B, f=10, rank_budget=64,
         c_inv = flops_classic_inv(d_in, d_out)
         o_evd = flops_randomised_evd(d_in, d_out, k, p, n_iter)
         c_app = flops_classic_apply(d_in, d_out)
-        o_app = flops_olsvered_apply(d_in, d_out, k)
+        o_app = flops_olssm_apply(d_in, d_out, k)
 
         gram_total   += gram
         cl_inv_total += c_inv
@@ -117,7 +117,7 @@ def analyse_model(name, layers, B, f=10, rank_budget=64,
         ol_app_total += o_app
         common_mem   += mem_gram_accum(d_in, d_out)
         cl_mem_total += mem_classic_extra(d_in, d_out)
-        ol_mem_total += mem_olsvered_extra(d_in, d_out, k)
+        ol_mem_total += mem_olssm_extra(d_in, d_out, k)
 
     # Amortised cost per step  =  gram  +  (inv/evd)/f  +  apply
     cl_step = gram_total + cl_inv_total / f + cl_app_total
@@ -184,7 +184,6 @@ def resnet50_fc_layers():
     layers += [(2048,1000)]
     return layers
 
-
 # ─── run analyses ────────────────────────────────────────────────────────
 
 models = {
@@ -199,7 +198,7 @@ rank_budget = 64
 f_update    = 10
 
 print("=" * 90)
-print(f"  THEORETICAL COMPARISON: Classical K-FAC  vs  OlsveredKFAC  (rank={rank_budget}, f={f_update})")
+print(f"  THEORETICAL COMPARISON: Classical K-FAC  vs  OlsSMKFAC  (rank={rank_budget}, f={f_update})")
 print("=" * 90)
 
 all_results = {}
@@ -208,7 +207,7 @@ for model_name, layers in models.items():
     print(f"\n{'─'*90}")
     print(f"  Model: {short}   ({len(layers)} linear layers)")
     print(f"{'─'*90}")
-    print(f"  {'Batch':>6}  {'Classic GF/step':>16}  {'Olsvered GF/step':>16}  "
+    print(f"  {'Batch':>6}  {'Classic GF/step':>16}  {'OlsSM GF/step':>16}  "
           f"{'Speedup':>8}  {'Cl mem MB':>10}  {'Ol mem MB':>10}  {'Mem ratio':>9}")
     print(f"  {'':─<6}  {'':─<16}  {'':─<16}  {'':─<8}  {'':─<10}  {'':─<10}  {'':─<9}")
     rows = []
@@ -231,7 +230,7 @@ for model_name, layers in models.items():
     total_cl = r['cl_step_GF']
     total_ol = r['ol_step_GF']
     print(f"\n  {short}")
-    print(f"    {'Component':<30} {'Classic (GF)':>14}  {'%':>5}   {'Olsvered (GF)':>14}  {'%':>5}")
+    print(f"    {'Component':<30} {'Classic (GF)':>14}  {'%':>5}   {'OlsSM (GF)':>14}  {'%':>5}")
     print(f"    {'':─<30} {'':─<14}  {'':─<5}   {'':─<14}  {'':─<5}")
     def row(name, cl_v, ol_v):
         print(f"    {name:<30} {cl_v:>14.3f}  {100*cl_v/total_cl:>4.1f}%   "
@@ -242,7 +241,7 @@ for model_name, layers in models.items():
     print(f"    {'TOTAL':─<30} {total_cl:>14.3f}           {total_ol:>14.3f}   "
           f"→  {r['speedup']:.1f}× speedup")
     print(f"    Memory (optimizer state):    Classic={r['cl_mem_MB']:.0f} MB   "
-          f"Olsvered={r['ol_mem_MB']:.0f} MB   ({r['mem_ratio']:.1f}× less)")
+          f"OlsSM={r['ol_mem_MB']:.0f} MB   ({r['mem_ratio']:.1f}× less)")
 
 # ─── wall-time estimate (V100 GPU effective throughput) ──────────────────
 print(f"\n\n{'=' * 90}")
@@ -279,11 +278,11 @@ for model_name, layers in models.items():
 
 # ─── plots ───────────────────────────────────────────────────────────────
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle(f"Classical K-FAC vs OlsveredKFAC — Theoretical Analysis\n"
+fig.suptitle(f"Classical K-FAC vs OlsSMKFAC — Theoretical Analysis\n"
              f"(rank={rank_budget}, update freq f={f_update}, adaptive EVD)",
              fontsize=13, fontweight="bold")
 
-colors = {"Classic": "#e05252", "Olsvered": "#3d85c8"}
+colors = {"Classic": "#e05252", "OlsSM": "#3d85c8"}
 
 for ax, (model_name, rows) in zip(axes.flat, all_results.items()):
     Bs = [r["B"] for r in rows]
@@ -293,7 +292,7 @@ for ax, (model_name, rows) in zip(axes.flat, all_results.items()):
 
     ax2 = ax.twinx()
     ax.plot(Bs, cl, "o-", color=colors["Classic"],  lw=2, ms=7, label="ClassicKFAC")
-    ax.plot(Bs, ol, "s-", color=colors["Olsvered"], lw=2, ms=7, label="OlsveredKFAC")
+    ax.plot(Bs, ol, "s-", color=colors["OlsSM"], lw=2, ms=7, label="OlsSMKFAC")
     ax2.bar([b*1.08 for b in Bs], sp, width=[b*0.15 for b in Bs],
             color="gold", alpha=0.6, label="Speedup ×")
     ax2.set_ylabel("Speedup (GFLOPs ratio ×)", color="goldenrod", fontsize=9)
@@ -311,7 +310,7 @@ for ax, (model_name, rows) in zip(axes.flat, all_results.items()):
     cl_mb = rows[-1]["cl_mem_MB"]
     ol_mb = rows[-1]["ol_mem_MB"]
     ax.text(0.5, 0.05,
-            f"Memory (B=4096): Classic={cl_mb:.0f}MB  Olsvered={ol_mb:.0f}MB  "
+            f"Memory (B=4096): Classic={cl_mb:.0f}MB  OlsSM={ol_mb:.0f}MB  "
             f"({rows[-1]['mem_ratio']:.1f}× less)",
             transform=ax.transAxes, fontsize=7.5, ha='center',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8))
@@ -325,7 +324,7 @@ print(f"\n\n{'=' * 90}")
 print(f"  OPTIMIZER STATE MEMORY (MB)  —  how much GPU RAM the optimizer consumes")
 print(f"  (Gram accumulators included; rank={rank_budget})")
 print("=" * 90)
-print(f"  {'Model':<30}  {'Classic MB':>10}  {'Olsvered MB':>11}  {'Ratio':>7}  {'Savings MB':>10}")
+print(f"  {'Model':<30}  {'Classic MB':>10}  {'OlsSM MB':>11}  {'Ratio':>7}  {'Savings MB':>10}")
 print(f"  {'':─<30}  {'':─<10}  {'':─<11}  {'':─<7}  {'':─<10}")
 for model_name, layers in models.items():
     short = model_name.replace("\n", " ")

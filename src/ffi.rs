@@ -1,6 +1,6 @@
 //! C ABI layer — `extern "C"` exports for C/C++ consumers.
 //!
-//! cbindgen reads this file to generate `include/olsvered.h`.
+//! cbindgen reads this file to generate `include/olssm.h`.
 //!
 //! **Memory layout:** all matrices are **column-major** (Fortran / C-style
 //! `double*` arrays as used by BLAS/LAPACK).  Callers must allocate output
@@ -16,9 +16,9 @@ use crate::algorithms;
 // Status codes
 // ---------------------------------------------------------------------------
 
-/// Status codes returned by all `olsvered_*` FFI functions.
+/// Status codes returned by all `olssm_*` FFI functions.
 #[repr(C)]
-pub enum OlsveredStatus {
+pub enum OlsSMStatus {
     /// Success.
     Ok = 0,
     /// Row/column dimension mismatch between inputs.
@@ -31,17 +31,17 @@ pub enum OlsveredStatus {
     SingularMatrix = 4,
 }
 
-impl From<algorithms::OlsveredError> for OlsveredStatus {
-    fn from(e: algorithms::OlsveredError) -> Self {
+impl From<algorithms::OlsSMError> for OlsSMStatus {
+    fn from(e: algorithms::OlsSMError) -> Self {
         match e {
-            algorithms::OlsveredError::DimensionMismatch { .. } => {
-                OlsveredStatus::DimensionMismatch
+            algorithms::OlsSMError::DimensionMismatch { .. } => {
+                OlsSMStatus::DimensionMismatch
             }
-            algorithms::OlsveredError::ZeroPivot { .. } => OlsveredStatus::ZeroPivot,
-            algorithms::OlsveredError::WeightDimension { .. } => {
-                OlsveredStatus::DimensionMismatch
+            algorithms::OlsSMError::ZeroPivot { .. } => OlsSMStatus::ZeroPivot,
+            algorithms::OlsSMError::WeightDimension { .. } => {
+                OlsSMStatus::DimensionMismatch
             }
-            algorithms::OlsveredError::SingularMatrix => OlsveredStatus::SingularMatrix,
+            algorithms::OlsSMError::SingularMatrix => OlsSMStatus::SingularMatrix,
         }
     }
 }
@@ -97,26 +97,26 @@ unsafe fn vec_to_ptr(vec: &DVector<f64>, out: *mut f64) {
 /// @param x_cols   Number of columns in X (p predictors)
 /// @param y        f64 array of length x_rows
 /// @param c_out    Caller-allocated output buffer of size (x_cols+1)*(x_cols+1)
-/// @return         OlsveredStatus::Ok on success
+/// @return         OlsSMStatus::Ok on success
 #[no_mangle]
-pub unsafe extern "C" fn olsvered_modified_cholesky(
+pub unsafe extern "C" fn olssm_modified_cholesky(
     x: *const f64,
     x_rows: usize,
     x_cols: usize,
     y: *const f64,
     c_out: *mut f64,
-) -> OlsveredStatus {
+) -> OlsSMStatus {
     if x.is_null() || y.is_null() || c_out.is_null() {
-        return OlsveredStatus::NullPointer;
+        return OlsSMStatus::NullPointer;
     }
     let xm = mat_from_ptr(x, x_rows, x_cols);
     let yv = vec_from_ptr(y, x_rows);
     match algorithms::modified_cholesky(&xm, &yv) {
         Ok(c) => {
             mat_to_ptr(&c, c_out);
-            OlsveredStatus::Ok
+            OlsSMStatus::Ok
         }
-        Err(e) => OlsveredStatus::from(e),
+        Err(e) => OlsSMStatus::from(e),
     }
 }
 
@@ -129,23 +129,23 @@ pub unsafe extern "C" fn olsvered_modified_cholesky(
 /// @param c        Column-major f64 array, shape (dim × dim)
 /// @param dim      Dimension of C (= p+1)
 /// @param beta_out Caller-allocated output buffer of length (dim-1)
-/// @return         OlsveredStatus::Ok on success
+/// @return         OlsSMStatus::Ok on success
 #[no_mangle]
-pub unsafe extern "C" fn olsvered_back_substitute(
+pub unsafe extern "C" fn olssm_back_substitute(
     c: *const f64,
     dim: usize,
     beta_out: *mut f64,
-) -> OlsveredStatus {
+) -> OlsSMStatus {
     if c.is_null() || beta_out.is_null() {
-        return OlsveredStatus::NullPointer;
+        return OlsSMStatus::NullPointer;
     }
     let cm = mat_from_ptr(c, dim, dim);
     match algorithms::back_substitute(&cm) {
         Ok(beta) => {
             vec_to_ptr(&beta, beta_out);
-            OlsveredStatus::Ok
+            OlsSMStatus::Ok
         }
-        Err(e) => OlsveredStatus::from(e),
+        Err(e) => OlsSMStatus::from(e),
     }
 }
 
@@ -160,26 +160,26 @@ pub unsafe extern "C" fn olsvered_back_substitute(
 /// @param x_cols   p predictors
 /// @param y        f64 array of length x_rows
 /// @param beta_out Caller-allocated output buffer of length x_cols
-/// @return         OlsveredStatus::Ok on success
+/// @return         OlsSMStatus::Ok on success
 #[no_mangle]
-pub unsafe extern "C" fn olsvered_solve_ols(
+pub unsafe extern "C" fn olssm_solve_ols(
     x: *const f64,
     x_rows: usize,
     x_cols: usize,
     y: *const f64,
     beta_out: *mut f64,
-) -> OlsveredStatus {
+) -> OlsSMStatus {
     if x.is_null() || y.is_null() || beta_out.is_null() {
-        return OlsveredStatus::NullPointer;
+        return OlsSMStatus::NullPointer;
     }
     let xm = mat_from_ptr(x, x_rows, x_cols);
     let yv = vec_from_ptr(y, x_rows);
     match algorithms::solve_ols(&xm, &yv) {
         Ok(beta) => {
             vec_to_ptr(&beta, beta_out);
-            OlsveredStatus::Ok
+            OlsSMStatus::Ok
         }
-        Err(e) => OlsveredStatus::from(e),
+        Err(e) => OlsSMStatus::from(e),
     }
 }
 
@@ -193,24 +193,24 @@ pub unsafe extern "C" fn olsvered_solve_ols(
 /// @param x_rows   n samples
 /// @param x_cols   p predictors
 /// @param q_out    Caller-allocated output buffer (x_rows * x_cols)
-/// @return         OlsveredStatus::Ok on success
+/// @return         OlsSMStatus::Ok on success
 #[no_mangle]
-pub unsafe extern "C" fn olsvered_simplified_gram_schmidt(
+pub unsafe extern "C" fn olssm_simplified_gram_schmidt(
     x: *const f64,
     x_rows: usize,
     x_cols: usize,
     q_out: *mut f64,
-) -> OlsveredStatus {
+) -> OlsSMStatus {
     if x.is_null() || q_out.is_null() {
-        return OlsveredStatus::NullPointer;
+        return OlsSMStatus::NullPointer;
     }
     let xm = mat_from_ptr(x, x_rows, x_cols);
     match algorithms::simplified_gram_schmidt(&xm) {
         Ok(q) => {
             mat_to_ptr(&q, q_out);
-            OlsveredStatus::Ok
+            OlsSMStatus::Ok
         }
-        Err(e) => OlsveredStatus::from(e),
+        Err(e) => OlsSMStatus::from(e),
     }
 }
 
@@ -225,25 +225,25 @@ pub unsafe extern "C" fn olsvered_simplified_gram_schmidt(
 /// @param x_cols   p predictors
 /// @param w        Column-major f64 array (x_rows × x_rows) — weight matrix
 /// @param g_out    Caller-allocated output buffer (x_cols * x_rows)
-/// @return         OlsveredStatus::Ok on success
+/// @return         OlsSMStatus::Ok on success
 #[no_mangle]
-pub unsafe extern "C" fn olsvered_weighted_generalized_inverse(
+pub unsafe extern "C" fn olssm_weighted_generalized_inverse(
     x: *const f64,
     x_rows: usize,
     x_cols: usize,
     w: *const f64,
     g_out: *mut f64,
-) -> OlsveredStatus {
+) -> OlsSMStatus {
     if x.is_null() || w.is_null() || g_out.is_null() {
-        return OlsveredStatus::NullPointer;
+        return OlsSMStatus::NullPointer;
     }
     let xm = mat_from_ptr(x, x_rows, x_cols);
     let wm = mat_from_ptr(w, x_rows, x_rows);
     match algorithms::weighted_generalized_inverse(&xm, &wm) {
         Ok(g) => {
             mat_to_ptr(&g, g_out);
-            OlsveredStatus::Ok
+            OlsSMStatus::Ok
         }
-        Err(e) => OlsveredStatus::from(e),
+        Err(e) => OlsSMStatus::from(e),
     }
 }

@@ -13,7 +13,7 @@ import time
 import numpy as np
 
 try:
-    import olsvered
+    import olssm
     _HAS_RUST = True
 except ImportError:
     _HAS_RUST = False
@@ -25,12 +25,10 @@ REPS    = 300
 
 rng = np.random.default_rng(42)
 
-
 def make_gram(n: int) -> np.ndarray:
     """Random SPD matrix of size n×n."""
     A = rng.standard_normal((n, n)).astype(np.float32)
     return A @ A.T / n + np.eye(n, dtype=np.float32) * DAMPING
-
 
 def time_fn(fn, warmup: int = WARMUP, reps: int = REPS) -> float:
     """Return mean call time in milliseconds."""
@@ -40,7 +38,6 @@ def time_fn(fn, warmup: int = WARMUP, reps: int = REPS) -> float:
     for _ in range(reps):
         fn()
     return (time.perf_counter() - t0) / reps * 1000
-
 
 LAYERS = [
     ("fc1  784→512", 512, 784),
@@ -70,8 +67,8 @@ for name, d_out, d_in in LAYERS:
 
     # Classic: cached n×n inverses, 2 matmuls
     if _HAS_RUST:
-        A_inv = olsvered.lu_damped_inverse_f32(A_np, DAMPING)
-        G_inv = olsvered.lu_damped_inverse_f32(G_np, DAMPING)
+        A_inv = olssm.lu_damped_inverse_f32(A_np, DAMPING)
+        G_inv = olssm.lu_damped_inverse_f32(G_np, DAMPING)
     else:
         A_inv = np.linalg.inv(A_np + DAMPING * np.eye(d_in, dtype=np.float32))
         G_inv = np.linalg.inv(G_np + DAMPING * np.eye(d_out, dtype=np.float32))
@@ -82,8 +79,8 @@ for name, d_out, d_in in LAYERS:
     for k in K_VALUES:
         k_eff = min(k, min(d_out, d_in))  # clamp to matrix size
         if _HAS_RUST:
-            Qg, ig = olsvered.eigh_topk_f32(G_np, k_eff, DAMPING)
-            Qa, ia = olsvered.eigh_topk_f32(A_np, k_eff, DAMPING)
+            Qg, ig = olssm.eigh_topk_f32(G_np, k_eff, DAMPING)
+            Qa, ia = olssm.eigh_topk_f32(A_np, k_eff, DAMPING)
         else:
             lam_g, Qg_full = np.linalg.eigh(G_np.astype(np.float64))
             lam_a, Qa_full = np.linalg.eigh(A_np.astype(np.float64))

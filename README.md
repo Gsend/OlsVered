@@ -1,12 +1,12 @@
-# olsvered
+# olssm
 
 **Closed-form Ordinary Least Squares — without matrix inversion or normalization.**
 
 A Rust implementation of the three algorithms from the paper:
 
-> **"Solving The Ordinary Least Squares in Closed Form, Without Inversion or Normalization"**
-> Vered Senderovich Madar & Sandra L. Batista
-> *arXiv:2301.01854* — [https://arxiv.org/abs/2301.01854](https://arxiv.org/abs/2301.01854)
+> **"
+> 
+> *
 > Submitted January 2023 · Revised December 2023
 
 ---
@@ -45,7 +45,7 @@ maturin develop --features python
 ```toml
 # Cargo.toml
 [dependencies]
-olsvered = { path = "path/to/olsvered" }
+olssm = { path = "path/to/olssm" }
 ```
 
 ### C / C++
@@ -54,7 +54,7 @@ Build the shared library and use the generated header:
 
 ```bash
 cargo build --release
-# Header auto-generated at: include/olsvered.h
+# Header auto-generated at: include/olssm.h
 ```
 
 ---
@@ -65,7 +65,7 @@ cargo build --release
 
 ```python
 import numpy as np
-import olsvered
+import olssm
 
 rng = np.random.default_rng(42)
 X = rng.standard_normal((100, 4))          # 100 observations, 4 predictors
@@ -73,13 +73,13 @@ true_beta = np.array([1.0, -2.0, 3.0, 0.5])
 y = X @ true_beta + rng.standard_normal(100) * 0.1   # small noise
 
 # Solve OLS — no matrix inversion under the hood
-beta = olsvered.solve_ols(X, y)
+beta = olssm.solve_ols(X, y)
 print("Estimated β:", beta)
 print("True      β:", true_beta)
 # → Estimated β: [ 1.002 -1.998  3.001  0.499]
 
 # You can also inspect the intermediate C matrix (unit-diagonal upper triangular)
-C = olsvered.modified_cholesky(X, y)
+C = olssm.modified_cholesky(X, y)
 print("C shape:", C.shape)          # (5, 5) — augmented with y column
 print("Diagonal:", np.diag(C))      # all 1.0
 ```
@@ -88,13 +88,13 @@ print("Diagonal:", np.diag(C))      # all 1.0
 
 ```python
 import numpy as np
-import olsvered
+import olssm
 
 rng = np.random.default_rng(7)
 X = rng.standard_normal((50, 5))
 
 # Orthogonalize columns — no sqrt, no normalization
-Q = olsvered.simplified_gram_schmidt(X)
+Q = olssm.simplified_gram_schmidt(X)
 
 print("Q shape:", Q.shape)           # (50, 5)
 
@@ -108,7 +108,7 @@ print("Max off-diagonal:", np.abs(off_diag).max())   # ≈ 0.0
 
 ```python
 import numpy as np
-import olsvered
+import olssm
 
 rng = np.random.default_rng(99)
 n, p = 30, 3
@@ -120,7 +120,7 @@ y = X @ true_beta + rng.standard_normal(n) * 0.05
 W = np.diag(rng.uniform(0.5, 2.0, n))
 
 # Compute weighted generalized inverse G = (XᵀWX)⁻¹ Xᵀ W
-G = olsvered.weighted_generalized_inverse(X, W)
+G = olssm.weighted_generalized_inverse(X, W)
 print("G shape:", G.shape)    # (3, 30) — shape (p, n)
 
 # Weighted OLS solution
@@ -133,16 +133,16 @@ print("True      β:", true_beta)
 
 ```python
 import numpy as np
-import olsvered
+import olssm
 
 rng = np.random.default_rng(0)
 X = rng.standard_normal((200, 10))
 y = rng.standard_normal(200)
 
-beta_olsvered = olsvered.solve_ols(X, y)
+beta_olssm = olssm.solve_ols(X, y)
 beta_numpy, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
 
-print("Max abs difference:", np.abs(beta_olsvered - beta_numpy).max())
+print("Max abs difference:", np.abs(beta_olssm - beta_numpy).max())
 # → Max abs difference: ~1e-12
 ```
 
@@ -152,7 +152,7 @@ print("Max abs difference:", np.abs(beta_olsvered - beta_numpy).max())
 
 ```rust
 use nalgebra::{DMatrix, DVector};
-use olsvered::algorithms::{solve_ols, simplified_gram_schmidt, weighted_generalized_inverse};
+use olssm::algorithms::{solve_ols, simplified_gram_schmidt, weighted_generalized_inverse};
 
 fn main() {
     // 5 observations, 2 predictors
@@ -199,7 +199,7 @@ pytest tests/test_python.py -v
 ## Project Structure
 
 ```
-olsvered/
+olssm/
 ├── src/
 │   ├── algorithms.rs   # Pure Rust math — all 3 algorithms
 │   ├── ffi.rs          # C ABI wrappers (extern "C")
@@ -208,7 +208,7 @@ olsvered/
 │   ├── test_algorithms.rs   # Rust unit tests
 │   └── test_python.py       # Python integration tests vs numpy/scipy
 ├── include/
-│   └── olsvered.h      # Auto-generated C header (cbindgen)
+│   └── olssm.h      # Auto-generated C header (cbindgen)
 ├── build.rs            # cbindgen build script
 ├── Cargo.toml
 └── pyproject.toml      # maturin config

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Core benchmark: olsvered LU inversion vs classical inversion for K-FAC Gram matrices.
+Core benchmark: olssm LU inversion vs classical inversion for K-FAC Gram matrices.
 
 This benchmark tests the EXACT bottleneck that matters — Gram matrix inversion
 as it occurs in K-FAC / Shampoo optimizers. No GPU or PyTorch required.
@@ -8,7 +8,7 @@ as it occurs in K-FAC / Shampoo optimizers. No GPU or PyTorch required.
 For each matrix size (simulating real transformer layer dimensions):
   1. Generate realistic Gram matrices (XᵀX from random activations)
   2. Time classical inversion (numpy.linalg.inv — equivalent to torch.linalg.inv)
-  3. Time olsvered-style LU inversion (scipy LU factor + solve)
+  3. Time olssm-style LU inversion (scipy LU factor + solve)
   4. Compare numerical accuracy (condition number, inverse residual)
   5. Test near-singular matrices (the stability advantage scenario)
 
@@ -25,7 +25,6 @@ from typing import Dict, List
 import numpy as np
 from scipy import linalg as sp_linalg
 
-
 # ---------------------------------------------------------------------------
 # Inversion methods (these mirror what happens in K-FAC)
 # ---------------------------------------------------------------------------
@@ -35,20 +34,17 @@ def classical_inverse(gram: np.ndarray, damping: float) -> np.ndarray:
     damped = gram + damping * np.eye(gram.shape[0])
     return np.linalg.inv(damped)
 
-
 def lu_inverse(gram: np.ndarray, damping: float) -> np.ndarray:
-    """olsvered-style LU inverse: solve (A + λI) X = I via LU factorisation."""
+    """olssm-style LU inverse: solve (A + λI) X = I via LU factorisation."""
     damped = gram + damping * np.eye(gram.shape[0])
     lu, piv = sp_linalg.lu_factor(damped)
     return sp_linalg.lu_solve((lu, piv), np.eye(gram.shape[0]))
 
-
 def lu_solve_direct(gram: np.ndarray, rhs: np.ndarray, damping: float) -> np.ndarray:
-    """olsvered-style direct solve: (A + λI) X = rhs, no explicit inverse."""
+    """olssm-style direct solve: (A + λI) X = rhs, no explicit inverse."""
     damped = gram + damping * np.eye(gram.shape[0])
     lu, piv = sp_linalg.lu_factor(damped)
     return sp_linalg.lu_solve((lu, piv), rhs)
-
 
 # ---------------------------------------------------------------------------
 # Matrix generators (simulate real K-FAC Gram matrices)
@@ -59,7 +55,6 @@ def make_gram_from_activations(n_samples: int, dim: int, rng: np.random.Generato
     X = rng.standard_normal((n_samples, dim))
     return (X.T @ X) / n_samples
 
-
 def make_near_singular_gram(dim: int, rank_deficiency: int, rng: np.random.Generator) -> np.ndarray:
     """Build a near-singular Gram matrix (simulates collapsed attention heads)."""
     effective_rank = dim - rank_deficiency
@@ -69,7 +64,6 @@ def make_near_singular_gram(dim: int, rank_deficiency: int, rng: np.random.Gener
     # Add tiny noise to make it technically full-rank but ill-conditioned
     gram += 1e-10 * np.eye(dim)
     return gram
-
 
 # ---------------------------------------------------------------------------
 # Single benchmark run
@@ -85,7 +79,6 @@ class InversionResult:
     max_residual: float       # max |A @ A⁻¹ - I|
     condition_number: float
     is_near_singular: bool = False
-
 
 def benchmark_single(gram: np.ndarray, damping: float, n_warmup: int = 3,
                      n_trials: int = 20, is_near_singular: bool = False
@@ -143,7 +136,6 @@ def benchmark_single(gram: np.ndarray, damping: float, n_warmup: int = 3,
         ))
 
     return results
-
 
 # ---------------------------------------------------------------------------
 # Full benchmark suite
@@ -259,7 +251,7 @@ def run_full_benchmark():
 
     output = {
         "metadata": {
-            "description": "Gram matrix inversion benchmark: classical vs LU-based (olsvered)",
+            "description": "Gram matrix inversion benchmark: classical vs LU-based (olssm)",
             "n_warmup": 3,
             "n_trials": 20,
             "numpy_version": np.__version__,
@@ -309,7 +301,6 @@ def run_full_benchmark():
         if classical and lu:
             print(f"  dim={dim:>5}: classical residual={classical[0].max_residual:.2e}, "
                   f"LU residual={lu[0].max_residual:.2e}")
-
 
 if __name__ == "__main__":
     run_full_benchmark()

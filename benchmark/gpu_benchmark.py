@@ -1,12 +1,12 @@
 """
-OlsveredKFAC GPU Benchmark
+OlsSMKFAC GPU Benchmark
 ============================
-Empirically measures the advantage of OlsveredKFAC over ClassicKFAC and Adam
+Empirically measures the advantage of OlsSMKFAC over ClassicKFAC and Adam
 on real GPU hardware, using two tasks:
 
   Task 1 — Large MLP (quick, 20-40 min):
       4-layer 784→2048→2048→2048→10 network trained on MNIST.
-      All Linear layers → full OlsveredKFAC coverage.
+      All Linear layers → full OlsSMKFAC coverage.
       Used to verify per-step overhead ratios and convergence curves.
 
   Task 2 — BERT-base fine-tuning on SST-2 (comprehensive, 3-6 hrs):
@@ -199,7 +199,7 @@ def run_mlp_benchmark(device, args):
     configs = [
         dict(name="Adam",          B=128,  lr=1e-3,  kfac=False),
         dict(name="ClassicKFAC",   B=512,  lr=5e-2,  kfac=True,  randomised=False),
-        dict(name="OlsveredKFAC",  B=512,  lr=3e-2,  kfac=True,  randomised=True),
+        dict(name="OlsSMKFAC",  B=512,  lr=3e-2,  kfac=True,  randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -220,11 +220,11 @@ def run_mlp_benchmark(device, args):
         if not cfg['kfac']:
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
         elif cfg['randomised']:
-            from optimizer.olsvered_kfac import OlsveredKFAC
+            from optimizer.olssm_kfac import OlsSMKFAC
             # On GPU: inv_update_freq=10 is fine (EVD is fast).
             # On CPU: increase to 50 to amortise the expensive EVD cost.
             evd_freq = 20 if torch.cuda.is_available() else 50
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-3,
+            opt = OlsSMKFAC(model, lr=cfg['lr'], damping=5e-3,
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
@@ -365,7 +365,7 @@ def run_bert_benchmark(device, args):
 
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
-        dict(name="OlsveredKFAC", B=512, lr=3e-3, kfac=True,  randomised=True),
+        dict(name="OlsSMKFAC", B=512, lr=3e-3, kfac=True,  randomised=True),
         dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
@@ -389,9 +389,9 @@ def run_bert_benchmark(device, args):
             opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'],
                                     weight_decay=0.001)
         elif cfg['randomised']:
-            from optimizer.olsvered_kfac import OlsveredKFAC
+            from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=3e-3,
+            opt = OlsSMKFAC(model, lr=cfg['lr'], damping=3e-3,
                                factor_update_freq=20, inv_update_freq=5,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=128, momentum=0.0,
@@ -609,13 +609,13 @@ def run_cifar_benchmark(device, args):
     # K-FAC shines here: lower lr than MNIST (harder task), same damping/rank
     # improvements from the MLP task.  Adam uses a slightly lower lr too since
     # CIFAR-10 is noisier.
-    # Empirically tuned on CIFAR-10: B=1024 + gamma=0.999 for OlsveredKFAC
+    # Empirically tuned on CIFAR-10: B=1024 + gamma=0.999 for OlsSMKFAC
     # gives 58.8% — beating Adam (57.9%).  Larger batch improves Gram matrix
     # quality; gamma=0.999 smooths over ~1000 update windows for stable curvature.
     configs = [
         dict(name="Adam",         B=128,  lr=3e-4, kfac=False),
         dict(name="ClassicKFAC",  B=512,  lr=3e-2, kfac=True, randomised=False),
-        dict(name="OlsveredKFAC", B=1024, lr=5e-3, kfac=True, randomised=True),
+        dict(name="OlsSMKFAC", B=1024, lr=5e-3, kfac=True, randomised=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -636,9 +636,9 @@ def run_cifar_benchmark(device, args):
         if not cfg['kfac']:
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
         elif cfg['randomised']:
-            from optimizer.olsvered_kfac import OlsveredKFAC
+            from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 20 if torch.cuda.is_available() else 50
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=5e-3,
+            opt = OlsSMKFAC(model, lr=cfg['lr'], damping=5e-3,
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
@@ -774,7 +774,6 @@ class _CausalSelfAttention(nn.Module):
         out   = (attn @ v).transpose(1, 2).contiguous().view(B, T, C)
         return self.out(out)
 
-
 class _TransformerBlock(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
@@ -792,7 +791,6 @@ class _TransformerBlock(nn.Module):
         x = x + self.attn(self.norm1(x), mask)
         x = x + self.ff(self.norm2(x))
         return x
-
 
 class SmallGPT(nn.Module):
     """Small GPT-style causal LM — all projections are nn.Linear for K-FAC.
@@ -830,7 +828,6 @@ class SmallGPT(nn.Module):
         x = self.norm(x)
         return self.head(x)   # (B, T, vocab_size)
 
-
 def run_transformer_benchmark(device, args):
     """Train a small GPT from random init on WikiText-2.
 
@@ -839,7 +836,7 @@ def run_transformer_benchmark(device, args):
     both optimizers start from the same random initialisation.
 
     Metric: validation perplexity (lower = better).
-    OlsveredKFAC is expected to reach the same perplexity in fewer samples
+    OlsSMKFAC is expected to reach the same perplexity in fewer samples
     because the natural gradient follows the loss curvature from step 1.
     """
     print("\n" + "="*70)
@@ -912,7 +909,7 @@ def run_transformer_benchmark(device, args):
     _lr_cls = args.lr_cls_transformer if args.lr_cls_transformer is not None else 8e-3
     configs = [
         dict(name="Adam",         B=32, lr=3e-4,   kfac=False),
-        dict(name="OlsveredKFAC", B=64, lr=_lr_ols, kfac=True, randomised=True),
+        dict(name="OlsSMKFAC", B=64, lr=_lr_ols, kfac=True, randomised=True),
         dict(name="ClassicKFAC",  B=64, lr=_lr_cls, kfac=True, randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
@@ -964,12 +961,12 @@ def run_transformer_benchmark(device, args):
                                     weight_decay=0.01)
             emb_opt = None
         elif cfg['randomised']:
-            from optimizer.olsvered_kfac import OlsveredKFAC
+            from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 5 if torch.cuda.is_available() else 20
             # max_gram_dim=4096: skip K-FAC hooks on the LM head (out=50257).
             # Its G matrix (50257×50257 ≈ 10 GB) would cause OOM.
             # Embeddings + excluded head are updated by emb_opt (AdamW).
-            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
+            opt = OlsSMKFAC(model, lr=cfg['lr'], damping=1e-3,
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=128,
                                adaptive_rank_budget=128, momentum=0.0,
@@ -1100,7 +1097,6 @@ def run_transformer_benchmark(device, args):
 
     return all_results
 
-
 # ─── Scaling Benchmark ────────────────────────────────────────────────────
 
 def run_scaling_benchmark(device, args):
@@ -1109,14 +1105,14 @@ def run_scaling_benchmark(device, args):
 
       1. Step-cost scaling:
            Adam         O(n)     — element-wise, always cheapest per step
-           OlsveredKFAC O(n·r²)  — randomised EVD, grows slowly
+           OlsSMKFAC O(n·r²)  — randomised EVD, grows slowly
            ClassicKFAC  O(n³)    — direct inversion, explodes at large n
 
       2. Convergence quality (fixed sample budget):
            K-FAC uses curvature info → reaches higher accuracy in the same
            number of steps vs Adam.  Combined with panel 1, the third panel
            ("accuracy per ms of optimizer overhead") shows the crossover where
-           OlsveredKFAC beats Adam on effective throughput.
+           OlsSMKFAC beats Adam on effective throughput.
 
     Model:  Linear(width, width) → ReLU → Linear(width, 10)
     Data:   Gaussian synthetic — 10-class linear-separable problem
@@ -1171,7 +1167,7 @@ def run_scaling_benchmark(device, args):
         opt_configs = [
             dict(name="Adam",         kfac=False),
             dict(name="ClassicKFAC",  kfac=True, randomised=False),
-            dict(name="OlsveredKFAC", kfac=True, randomised=True),
+            dict(name="OlsSMKFAC", kfac=True, randomised=True),
         ]
         opt_configs = [c for c in opt_configs if c["name"].lower() not in args.skip]
 
@@ -1179,8 +1175,8 @@ def run_scaling_benchmark(device, args):
             if not cfg['kfac']:
                 return torch.optim.Adam(model.parameters(), lr=1e-3)
             elif cfg['randomised']:
-                from optimizer.olsvered_kfac import OlsveredKFAC
-                return OlsveredKFAC(model, lr=1e-2, damping=1e-2,
+                from optimizer.olssm_kfac import OlsSMKFAC
+                return OlsSMKFAC(model, lr=1e-2, damping=1e-2,
                                     factor_update_freq=1, inv_update_freq=1,
                                     adaptive=True, adaptive_min_n=32,
                                     adaptive_rank_budget=rank_budget,
@@ -1262,22 +1258,21 @@ def run_scaling_benchmark(device, args):
     make_scaling_plot(timing_results, conv_results, CONV_STEPS, BATCH)
     return timing_results, conv_results
 
-
 def make_scaling_plot(timing_results, conv_results, conv_steps, batch):
     import matplotlib.pyplot as plt
 
     COLORS = {
         "Adam":         "#7f8c8d",
         "ClassicKFAC":  "#c0392b",
-        "OlsveredKFAC": "#2980b9",
+        "OlsSMKFAC": "#2980b9",
     }
-    MARKERS = {"Adam": "s", "ClassicKFAC": "^", "OlsveredKFAC": "o"}
-    names  = ["Adam", "ClassicKFAC", "OlsveredKFAC"]
+    MARKERS = {"Adam": "s", "ClassicKFAC": "^", "OlsSMKFAC": "o"}
+    names  = ["Adam", "ClassicKFAC", "OlsSMKFAC"]
     widths = sorted(set(r['width'] for r in timing_results))
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     fig.suptitle(
-        "OlsveredKFAC Scaling Benchmark\n"
+        "OlsSMKFAC Scaling Benchmark\n"
         "Step-cost scaling (left)  ·  Convergence quality (middle)  ·  "
         "Effective throughput (right)",
         fontsize=12, fontweight="bold"
@@ -1353,15 +1348,14 @@ def make_scaling_plot(timing_results, conv_results, conv_steps, batch):
     fig.savefig(path, dpi=150, bbox_inches="tight")
     print(f"  Scaling plot saved → {path}")
 
-
 # ─── Plotting ─────────────────────────────────────────────────────────────
 
 def make_plots(results, tag):
     import matplotlib.pyplot as plt
-    COLORS = {"Adam":"#7f8c8d","ClassicKFAC":"#c0392b","OlsveredKFAC":"#2980b9"}
+    COLORS = {"Adam":"#7f8c8d","ClassicKFAC":"#c0392b","OlsSMKFAC":"#2980b9"}
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 11))
-    fig.suptitle(f"OlsveredKFAC GPU Benchmark — {tag}", fontsize=13, fontweight="bold")
+    fig.suptitle(f"OlsSMKFAC GPU Benchmark — {tag}", fontsize=13, fontweight="bold")
 
     # Detect whether results use accuracy (classification) or perplexity (LM)
     _has_ppl = any("curve_val_ppl" in r for r in results)
@@ -1458,19 +1452,19 @@ def print_summary(results):
 
     # Compute key ratios
     by_name = {r["name"]: r for r in results}
-    if "OlsveredKFAC" in by_name and "ClassicKFAC" in by_name:
-        ol = by_name["OlsveredKFAC"]; cl = by_name["ClassicKFAC"]
-        print(f"\n  OlsveredKFAC vs ClassicKFAC:")
+    if "OlsSMKFAC" in by_name and "ClassicKFAC" in by_name:
+        ol = by_name["OlsSMKFAC"]; cl = by_name["ClassicKFAC"]
+        print(f"\n  OlsSMKFAC vs ClassicKFAC:")
         print(f"    Optimizer overhead ratio : {cl['avg_opt_ms']/ol['avg_opt_ms']:.2f}× faster")
         print(f"    Wall-time ratio          : {cl['wall_s']/ol['wall_s']:.2f}× faster")
         print(f"    Memory savings           : {cl['peak_mem_gb']-ol['peak_mem_gb']:.2f} GB less")
         if cl.get('avg_power_w') and ol.get('avg_power_w'):
             elec_ratio = (cl['avg_power_w']*cl['wall_s']) / (ol['avg_power_w']*ol['wall_s'])
             print(f"    Energy ratio             : {elec_ratio:.2f}× less electricity")
-    if "OlsveredKFAC" in by_name and "Adam" in by_name:
-        ol = by_name["OlsveredKFAC"]; ad = by_name["Adam"]
-        print(f"\n  OlsveredKFAC vs Adam (samples to same final accuracy):")
-        print(f"    Samples seen: OlsveredKFAC {ol['samples']:,}  vs  Adam {ad['samples']:,}")
+    if "OlsSMKFAC" in by_name and "Adam" in by_name:
+        ol = by_name["OlsSMKFAC"]; ad = by_name["Adam"]
+        print(f"\n  OlsSMKFAC vs Adam (samples to same final accuracy):")
+        print(f"    Samples seen: OlsSMKFAC {ol['samples']:,}  vs  Adam {ad['samples']:,}")
         if ol['samples'] < ad['samples']:
             print(f"    K-FAC needed {ad['samples']/ol['samples']:.1f}× fewer samples — advantage confirmed")
         else:
@@ -1491,11 +1485,11 @@ def main():
     parser.add_argument(
         "--skip", default="",
         help="Comma-separated optimizer names to skip. "
-             "Valid: adam, classickfac, olsveredkfac. "
+             "Valid: adam, classickfac, olssmkfac. "
              "Example: --skip adam,classickfac"
     )
     parser.add_argument("--lr-ols-transformer", type=float, default=None,
-                        help="Override learning rate for OlsveredKFAC in transformer task. "
+                        help="Override learning rate for OlsSMKFAC in transformer task. "
                              "Default: 3e-3. Example: --lr-ols-transformer 5e-3")
     parser.add_argument("--lr-cls-transformer", type=float, default=None,
                         help="Override learning rate for ClassicKFAC in transformer task. "
@@ -1510,7 +1504,7 @@ def main():
     args.skip = {s.strip().lower() for s in args.skip.split(",") if s.strip()}
     args.max_steps_scaling = args.max_steps_scaling  # expose via consistent attr name
 
-    print("\nOlsveredKFAC GPU Benchmark")
+    print("\nOlsSMKFAC GPU Benchmark")
     print("="*70)
     device = get_device()
 
@@ -1553,7 +1547,7 @@ def main():
         sweep_best = {}   # opt_name -> (best_lr, best_ppl, result)
         sweep_args = copy.copy(args)
         sweep_args.skip = {"adam"}          # skip Adam during sweep
-        for opt_name, key in [("OlsveredKFAC", "lr_ols_transformer"),
+        for opt_name, key in [("OlsSMKFAC", "lr_ols_transformer"),
                                ("ClassicKFAC",  "lr_cls_transformer")]:
             if opt_name.lower() in args.skip:
                 continue
@@ -1561,10 +1555,10 @@ def main():
             best_lr = None; best_ppl = float("inf"); best_result = None
             for lr_candidate in _LR_CANDIDATES:
                 # Skip the other optimizer each iteration
-                other = "classickfac" if opt_name == "OlsveredKFAC" else "olsveredkfac"
+                other = "classickfac" if opt_name == "OlsSMKFAC" else "olssmkfac"
                 sweep_args.skip = {"adam", other}
                 setattr(sweep_args, "lr_ols_transformer",
-                        lr_candidate if opt_name == "OlsveredKFAC" else args.lr_ols_transformer)
+                        lr_candidate if opt_name == "OlsSMKFAC" else args.lr_ols_transformer)
                 setattr(sweep_args, "lr_cls_transformer",
                         lr_candidate if opt_name == "ClassicKFAC"  else args.lr_cls_transformer)
                 print(f"\n     lr = {lr_candidate:.0e}")
@@ -1585,7 +1579,7 @@ def main():
         for opt_name, (blr, bppl, _) in sweep_best.items():
             print(f"  {opt_name:<16}  best lr = {blr:.0e}   final ppl = {bppl:.1f}")
         if sweep_best:
-            ols_lr = sweep_best.get("OlsveredKFAC", (3e-3,))[0]
+            ols_lr = sweep_best.get("OlsSMKFAC", (3e-3,))[0]
             cls_lr = sweep_best.get("ClassicKFAC",  (3e-3,))[0]
             print(f"\n  Re-run with:")
             print(f"    bash run_benchmark.sh --task transformer "

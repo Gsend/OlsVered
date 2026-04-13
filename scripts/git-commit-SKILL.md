@@ -1,14 +1,14 @@
 ---
 name: git-commit
 description: >
-  Commit and push OlsveredKFAC repo changes to GitHub. Trigger this skill
+  Commit and push OlsSMKFAC repo changes to GitHub. Trigger this skill
   whenever the user says "commit", "push", "save to git", "commit and push",
   "push my changes", or any variation. Handles the Windows index.lock issue
   automatically by running the repo's commit script. Always use this skill
   instead of running raw git commands.
 ---
 
-# Git Commit & Push — OlsveredKFAC
+# Git Commit & Push — OlsSMKFAC
 
 When the user asks to commit and/or push, follow these steps exactly.
 
@@ -16,14 +16,14 @@ When the user asks to commit and/or push, follow these steps exactly.
 
 Run this to detect the situation:
 ```bash
-cd /sessions/friendly-gallant-allen/mnt/OlsVered && ls .git/index.lock 2>/dev/null && echo "LOCKED" || echo "NO_LOCK"
+cd /sessions/friendly-gallant-allen/mnt/OlsSM && ls .git/index.lock 2>/dev/null && echo "LOCKED" || echo "NO_LOCK"
 ```
 
 ## Step 2a — If NO_LOCK (VM can access git freely)
 
 Run the Linux commit script directly:
 ```bash
-cd /sessions/friendly-gallant-allen/mnt/OlsVered
+cd /sessions/friendly-gallant-allen/mnt/OlsSM
 bash scripts/commit_and_push.sh "COMMIT_MESSAGE_HERE"
 ```
 
@@ -34,7 +34,7 @@ describing what changed (e.g. "Add LR scheduler; fix K-FAC convergence").
 
 Tell the user:
 
-> The git index is locked by Windows. Please run this in PowerShell from your OlsVered folder:
+> The git index is locked by Windows. Please run this in PowerShell from your OlsSM folder:
 > ```powershell
 > powershell -ExecutionPolicy Bypass -File scripts\commit_and_push.ps1
 > ```
@@ -53,7 +53,7 @@ Both scripts stage these files (skipping any that don't exist yet):
 - `benchmark/theoretical_analysis.py`
 - `benchmark/results/`
 - `optimizer/hooks.py`
-- `optimizer/olsvered_kfac.py`
+- `optimizer/olssm_kfac.py`
 - `optimizer/classic_kfac.py`
 - `run_benchmark.sh`
 - `scripts/`
@@ -63,7 +63,7 @@ Both scripts stage these files (skipping any that don't exist yet):
 
 Confirm success by running:
 ```bash
-cd /sessions/friendly-gallant-allen/mnt/OlsVered && git log --oneline -3
+cd /sessions/friendly-gallant-allen/mnt/OlsSM && git log --oneline -3
 ```
 Show the user the last 3 commits so they can confirm the push went through.
 

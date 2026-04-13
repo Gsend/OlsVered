@@ -1,5 +1,5 @@
 """
-OlsveredLayerRetrainer — Block Coordinate Descent retrainer for the last N layers.
+OlsSMLayerRetrainer — Block Coordinate Descent retrainer for the last N layers.
 
 Algorithm overview
 ------------------
@@ -48,7 +48,6 @@ import torch.nn as nn
 
 from optimizer.backend import lu_solve_gram
 
-
 # ---------------------------------------------------------------------------
 # Internal state containers
 # ---------------------------------------------------------------------------
@@ -75,7 +74,6 @@ class GramState:
         self.XtY.zero_()
         self.n_samples = 0
 
-
 @dataclass
 class LoraAdapter:
     """Rank-r residual adapter:  output += B @ A @ input."""
@@ -86,12 +84,11 @@ class LoraAdapter:
         """x: (B, d_in)  →  (B, d_out)."""
         return x @ self.A.T @ self.B.T
 
-
 # ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
 
-class OlsveredLayerRetrainer:
+class OlsSMLayerRetrainer:
     """Retrain the last N nn.Linear layers of a model using exact OLS.
 
     Parameters
@@ -138,7 +135,7 @@ class OlsveredLayerRetrainer:
     -----
     ::
 
-        retrainer = OlsveredLayerRetrainer(model, n_layers=3, lambda_reg=1e-3)
+        retrainer = OlsSMLayerRetrainer(model, n_layers=3, lambda_reg=1e-3)
         history = retrainer.retrain(train_loader, target_fn=lambda y: F.one_hot(y, 10).float())
         retrainer.remove_hooks()   # clean up when done
     """
@@ -189,7 +186,7 @@ class OlsveredLayerRetrainer:
         self._retrained_layers: List[nn.Linear] = all_linear[-n_layers:]
 
         if self.verbose:
-            print(f"[OlsveredLayerRetrainer] Retraining {n_layers} layer(s):")
+            print(f"[OlsSMLayerRetrainer] Retraining {n_layers} layer(s):")
             for i, layer in enumerate(self._retrained_layers):
                 print(f"  [{i}] Linear({layer.in_features} → {layer.out_features}"
                       f"{', bias' if layer.bias is not None else ''})")
@@ -350,7 +347,7 @@ class OlsveredLayerRetrainer:
         delta = (layer.weight.data - old_W).abs().max().item()
 
         if self.verbose:
-            print(f"[OlsveredLayerRetrainer] Single-layer solve done. "
+            print(f"[OlsSMLayerRetrainer] Single-layer solve done. "
                   f"max|ΔW| = {delta:.2e}  (n={gram.n_samples})")
 
         history: Dict[str, Any] = {
@@ -690,7 +687,7 @@ class OlsveredLayerRetrainer:
     def summary(self) -> str:
         """Short text summary of the retrainer configuration."""
         lines = [
-            f"OlsveredLayerRetrainer",
+            f"OlsSMLayerRetrainer",
             f"  n_layers    : {self.n_layers}",
             f"  lambda_reg  : {self.lambda_reg}",
             f"  max_sweeps  : {self.max_sweeps}  (tol={self.tol})",
@@ -705,3 +702,4 @@ class OlsveredLayerRetrainer:
                 + (", bias)" if layer.bias is not None else ")")
             )
         return "\n".join(lines)
+                                       

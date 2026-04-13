@@ -1,11 +1,11 @@
-//! Rust unit tests for the olsvered algorithms.
+//! Rust unit tests for the olssm algorithms.
 //!
 //! Tests are written FIRST (TDD red phase) and define the contract for each
 //! algorithm.  Uses the `approx` crate for floating-point comparisons.
 
 use approx::assert_abs_diff_eq;
 use nalgebra::{DMatrix, DVector};
-use olsvered::algorithms::*;
+use olssm::algorithms::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -133,7 +133,7 @@ fn test_dimension_mismatch_error() {
     let y = DVector::from_column_slice(&[1.0, 2.0]); // wrong length: 2 ≠ 3
     let result = solve_ols(&x, &y);
     assert!(
-        matches!(result, Err(OlsveredError::DimensionMismatch { .. })),
+        matches!(result, Err(OlsSMError::DimensionMismatch { .. })),
         "expected DimensionMismatch, got {result:?}"
     );
 }
@@ -208,7 +208,7 @@ fn test_weighted_generalized_inverse_dimension_error() {
     let w_wrong = DMatrix::identity(3, 3); // wrong size: n=4 but W is 3×3
     let result = weighted_generalized_inverse(&x, &w_wrong);
     assert!(
-        matches!(result, Err(OlsveredError::WeightDimension { .. })),
+        matches!(result, Err(OlsSMError::WeightDimension { .. })),
         "expected WeightDimension error"
     );
 }
@@ -282,7 +282,7 @@ fn test_lu_solve_gram_dimension_mismatch() {
     let rhs = DMatrix::from_row_slice(4, 1, &[1.0, 2.0, 3.0, 4.0]);
     let result = lu_solve_gram(&gram, &rhs);
     assert!(
-        matches!(result, Err(OlsveredError::DimensionMismatch { .. })),
+        matches!(result, Err(OlsSMError::DimensionMismatch { .. })),
         "expected DimensionMismatch"
     );
 }
@@ -293,7 +293,7 @@ fn test_lu_solve_gram_non_square_error() {
     let rhs = DMatrix::from_row_slice(3, 1, &[1.0, 2.0, 3.0]);
     let result = lu_solve_gram(&gram, &rhs);
     assert!(
-        matches!(result, Err(OlsveredError::DimensionMismatch { .. })),
+        matches!(result, Err(OlsSMError::DimensionMismatch { .. })),
         "expected DimensionMismatch for non-square gram"
     );
 }
