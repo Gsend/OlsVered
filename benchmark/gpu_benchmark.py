@@ -908,8 +908,8 @@ def run_transformer_benchmark(device, args):
 
     vocab_size = tokenizer.vocab_size   # 50 257
 
-    _lr_ols = args.lr_ols_transformer if args.lr_ols_transformer is not None else 3e-3
-    _lr_cls = args.lr_cls_transformer if args.lr_cls_transformer is not None else 3e-3
+    _lr_ols = args.lr_ols_transformer if args.lr_ols_transformer is not None else 8e-3
+    _lr_cls = args.lr_cls_transformer if args.lr_cls_transformer is not None else 8e-3
     configs = [
         dict(name="Adam",         B=32, lr=3e-4,   kfac=False),
         dict(name="OlsveredKFAC", B=64, lr=_lr_ols, kfac=True, randomised=True),
@@ -993,7 +993,7 @@ def run_transformer_benchmark(device, args):
                 torch.optim.lr_scheduler.LinearLR(
                     opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
                 torch.optim.lr_scheduler.CosineAnnealingLR(
-                    opt, T_max=cosine_steps, eta_min=cfg['lr'] * 0.002),
+                    opt, T_max=cosine_steps, eta_min=cfg['lr'] * 0.0015),
             ], milestones=[warmup])
             emb_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 emb_opt, T_max=args.max_steps_transformer,
