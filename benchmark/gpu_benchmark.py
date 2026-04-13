@@ -80,8 +80,11 @@ def save_result_incremental(result: dict, task: str):
             f.write("task,name,batch_size,lr_init,lr_final,steps,samples,wall_s,"
                     "avg_fwdbwd_ms,avg_opt_ms,p99_opt_ms,"
                     "peak_mem_gb,avg_power_w,final_val_acc,final_val_loss\n")
-        final_acc  = result["curve_val_acc"][-1]  if result["curve_val_acc"]  else ""
-        final_loss = result["curve_val_loss"][-1] if result["curve_val_loss"] else ""
+        # Support both accuracy-based tasks (val_acc) and ppl-based tasks (val_ppl)
+        acc_curve  = result.get("curve_val_acc") or result.get("curve_val_ppl") or []
+        loss_curve = result.get("curve_val_loss") or []
+        final_acc  = acc_curve[-1]  if acc_curve  else ""
+        final_loss = loss_curve[-1] if loss_curve else ""
         pwr      = result.get("avg_power_w") or ""
         lr_final = result.get("lr_final", "")
         f.write(f"{result['task']},{result['name']},{result['B']},{result['lr']},"
