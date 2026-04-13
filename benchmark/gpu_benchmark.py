@@ -733,6 +733,317 @@ def run_cifar_benchmark(device, args):
 
     return all_results
 
+# ─── TASK 4: Small GPT trained from scratch on WikiText-2 ────────────────
+#
+# This is the regime where K-FAC's curvature advantage is strongest:
+#   - Random weight initialisation — no pre-trained features
+#   - Rough, high-dimensional loss landscape from the start
+#   - All Q/K/V/O + FFN layers are nn.Linear → full K-FAC coverage
+#
+# Metric: validation perplexity (exp(cross-entropy)) — lower is better.
+# A small model (~8M params) reaches perplexity ~150-200 after 5 000 steps.
+# K-FAC should reach the same perplexity in fewer samples than Adam.
+
+class _CausalSelfAttention(nn.Module):
+    """Multi-head causal self-attention with explicit Q/K/V nn.Linear layers."""
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.n_heads = n_heads
+        self.d_head  = d_model // n_heads
+        self.q   = nn.Linear(d_model, d_model, bias=False)
+        self.k   = nn.Linear(d_model, d_model, bias=False)
+        self.v   = nn.Linear(d_model, d_model, bias=False)
+        self.out = nn.Linear(d_model, d_model, bias=False)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        H, Dh   = self.n_heads, self.d_head
+        q = self.q(x).view(B, T, H, Dh).transpose(1, 2)  # (B, H, T, Dh)
+        k = self.k(x).view(B, T, H, Dh).transpose(1, 2)
+        v = self.v(x).view(B, T, H, Dh).transpose(1, 2)
+        scale = Dh ** -0.5
+        attn  = (q @ k.transpose(-2, -1)) * scale          # (B, H, T, T)
+        attn  = attn.masked_fill(mask, float('-inf'))
+        attn  = torch.softmax(attn, dim=-1)
+        attn  = self.drop(attn)
+        out   = (attn @ v).transpose(1, 2).contiguous().view(B, T, C)
+        return self.out(out)
+
+
+class _TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.attn  = _CausalSelfAttention(d_model, n_heads, dropout)
+        self.ff    = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), mask)
+        x = x + self.ff(self.norm2(x))
+        return x
+
+
+class SmallGPT(nn.Module):
+    """Small GPT-style causal LM — all projections are nn.Linear for K-FAC.
+
+    Default config (~8 M params):
+        4 layers, d=256, 4 heads, FFN=1024, vocab=50 257, seq_len=128.
+    """
+    def __init__(self, vocab_size: int = 50_257, d_model: int = 256,
+                 n_heads: int = 4, n_layers: int = 4, d_ff: int = 1024,
+                 max_seq_len: int = 128, dropout: float = 0.1):
+        super().__init__()
+        self.max_seq_len = max_seq_len
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_emb = nn.Embedding(max_seq_len, d_model)
+        self.drop    = nn.Dropout(dropout)
+        self.blocks  = nn.ModuleList([
+            _TransformerBlock(d_model, n_heads, d_ff, dropout)
+            for _ in range(n_layers)
+        ])
+        self.norm = nn.LayerNorm(d_model)
+        self.head = nn.Linear(d_model, vocab_size, bias=False)
+        self.head.weight = self.tok_emb.weight   # weight tying
+
+        # Pre-compute causal mask (upper-triangular = future tokens)
+        mask = torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
+        self.register_buffer("causal_mask", mask)
+
+    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+        B, T = idx.shape
+        pos  = torch.arange(T, device=idx.device)
+        x    = self.drop(self.tok_emb(idx) + self.pos_emb(pos))
+        mask = self.causal_mask[:T, :T]
+        for block in self.blocks:
+            x = block(x, mask)
+        x = self.norm(x)
+        return self.head(x)   # (B, T, vocab_size)
+
+
+def run_transformer_benchmark(device, args):
+    """Train a small GPT from random init on WikiText-2.
+
+    This is the from-scratch regime where K-FAC's curvature advantage over
+    Adam is most visible.  Pre-trained weights are intentionally NOT used —
+    both optimizers start from the same random initialisation.
+
+    Metric: validation perplexity (lower = better).
+    OlsveredKFAC is expected to reach the same perplexity in fewer samples
+    because the natural gradient follows the loss curvature from step 1.
+    """
+    print("\n" + "="*70)
+    print("  TASK 4: Small GPT trained from scratch on WikiText-2")
+    print("  (random init — no pre-trained weights)")
+    print("="*70)
+
+    try:
+        from transformers import GPT2TokenizerFast
+        from datasets import load_dataset
+    except ImportError:
+        print("  ERROR: transformers and datasets packages required.")
+        print("         pip install transformers datasets")
+        return []
+
+    SEQ_LEN = 128
+
+    print("  Loading WikiText-2 and GPT-2 tokenizer...")
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+    raw = load_dataset("wikitext", "wikitext-2-raw-v1")
+
+    def tokenize(batch):
+        ids = tokenizer(batch["text"], truncation=False)["input_ids"]
+        # Concatenate all token lists into one long sequence then chunk
+        flat = []
+        for seq in ids:
+            flat.extend(seq)
+        chunks = [flat[i:i + SEQ_LEN + 1]
+                  for i in range(0, len(flat) - SEQ_LEN, SEQ_LEN)]
+        return {"input_ids": chunks}
+
+    tokenized = {}
+    for split in ("train", "validation"):
+        ds = raw[split]
+        tok = tokenize({"text": ds["text"]})
+        import datasets as hf_ds
+        tokenized[split] = hf_ds.Dataset.from_dict(tok)
+        tokenized[split].set_format("torch")
+
+    from torch.utils.data import DataLoader
+
+    def collate(batch):
+        ids = torch.stack([b["input_ids"] for b in batch])  # (B, SEQ_LEN+1)
+        return ids[:, :-1], ids[:, 1:]                        # x, y
+
+    val_loader = DataLoader(tokenized["validation"], batch_size=64,
+                            collate_fn=collate, num_workers=2)
+
+    def evaluate_ppl(model, loader, device):
+        model.eval()
+        total_loss = total_tokens = 0
+        with torch.no_grad():
+            for x, y in loader:
+                x, y = x.to(device), y.to(device)
+                logits = model(x)                              # (B, T, V)
+                loss   = F.cross_entropy(
+                    logits.reshape(-1, logits.size(-1)), y.reshape(-1),
+                    ignore_index=tokenizer.pad_token_id)
+                total_loss   += loss.item() * y.numel()
+                total_tokens += y.numel()
+        ppl = float(torch.exp(torch.tensor(total_loss / total_tokens)))
+        return min(ppl, 9999.0)   # cap to avoid inf display
+
+    vocab_size = tokenizer.vocab_size   # 50 257
+
+    configs = [
+        dict(name="Adam",         B=64,  lr=3e-4, kfac=False),
+        dict(name="OlsveredKFAC", B=256, lr=3e-3, kfac=True, randomised=True),
+        dict(name="ClassicKFAC",  B=256, lr=3e-3, kfac=True, randomised=False),
+    ]
+    configs = [c for c in configs if c["name"].lower() not in args.skip]
+    if not configs:
+        print("  All optimizers skipped — nothing to run for transformer task.")
+        return []
+
+    all_results = []
+    for cfg in configs:
+        print(f"\n  ── {cfg['name']}  (B={cfg['B']}, lr={cfg['lr']}) ──")
+        torch.manual_seed(42)
+        model = SmallGPT(vocab_size=vocab_size).to(device)
+        print(f"     Parameters: {count_params(model):,}")
+
+        train_loader = DataLoader(tokenized["train"], batch_size=cfg['B'],
+                                  shuffle=True, collate_fn=collate, num_workers=2)
+
+        if not cfg['kfac']:
+            opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'],
+                                    weight_decay=0.01)
+        elif cfg['randomised']:
+            from optimizer.olsvered_kfac import OlsveredKFAC
+            evd_freq = 5 if torch.cuda.is_available() else 20
+            opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
+                               factor_update_freq=20, inv_update_freq=evd_freq,
+                               adaptive=True, adaptive_min_n=128,
+                               adaptive_rank_budget=128, momentum=0.0,
+                               grad_clip=1.0, gamma=0.95)
+        else:
+            from optimizer.classic_kfac import ClassicKFAC
+            opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
+                              factor_update_freq=20, inv_update_freq=20,
+                              momentum=0.0, grad_clip=1.0, gamma=0.9)
+
+        warmup       = 200
+        cosine_steps = max(1, args.max_steps_transformer - warmup)
+        if cfg['kfac']:
+            scheduler = torch.optim.lr_scheduler.SequentialLR(opt, schedulers=[
+                torch.optim.lr_scheduler.LinearLR(
+                    opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=cosine_steps, eta_min=cfg['lr'] * 0.002),
+            ], milestones=[warmup])
+        else:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=args.max_steps_transformer, eta_min=cfg['lr'] * 0.01)
+
+        data_iter = iter(train_loader)
+        power_mon  = PowerMonitor()
+        reset_memory_stats()
+        power_mon.start()
+
+        t0 = time.perf_counter()
+        step = samples_seen = 0
+        opt_times = []; fwdbwd_times = []
+        record_every_n = 10_000
+        next_record    = record_every_n
+        curve_steps=[]; curve_samples=[]; curve_times=[]
+        curve_val_ppl=[]; curve_val_loss=[]
+
+        # Threshold-triggered LR decay (same mechanism as BERT)
+        PPL_DECAY_THRESHOLD = 200.0   # trigger when ppl drops below this
+        PPL_DECAY_TRIGGERED = False
+
+        while step < args.max_steps_transformer:
+            try: x, y = next(data_iter)
+            except StopIteration:
+                data_iter = iter(train_loader); x, y = next(data_iter)
+            x, y = x.to(device), y.to(device)
+
+            t_fwd = time.perf_counter()
+            model.train()
+            logits = model(x)
+            loss   = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+            opt.zero_grad(); loss.backward()
+            t_fwd_done = time.perf_counter()
+
+            t_opt = time.perf_counter()
+            opt.step()
+            t_opt_done = time.perf_counter()
+
+            scheduler.step()
+            power_mon.sample()
+            fwdbwd_times.append(t_fwd_done - t_fwd)
+            opt_times.append(t_opt_done - t_opt)
+            step += 1; samples_seen += x.size(0)
+
+            if samples_seen >= next_record:
+                ppl = evaluate_ppl(model, val_loader, device)
+                vl  = float(np.log(ppl)) if ppl < 9999 else 9.21
+                wall = time.perf_counter() - t0
+                curve_steps.append(step); curve_samples.append(samples_seen)
+                curve_times.append(wall); curve_val_ppl.append(ppl)
+                curve_val_loss.append(vl)
+                next_record += record_every_n
+                cur_lr = scheduler.get_last_lr()[0]
+                # Threshold-triggered LR decay for K-FAC
+                if cfg['kfac'] and not PPL_DECAY_TRIGGERED and ppl < PPL_DECAY_THRESHOLD:
+                    PPL_DECAY_TRIGGERED = True
+                    remaining = max(1, args.max_steps_transformer - step)
+                    eta_min   = cfg['lr'] * 0.002
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        opt, T_max=remaining, eta_min=eta_min)
+                    if hasattr(opt, 'damping'):
+                        opt.damping = max(1e-4, opt.damping * 0.1)
+                    print(f"     *** ppl < {PPL_DECAY_THRESHOLD:.0f} — "
+                          f"fast cosine decay over {remaining} steps ***")
+                print(f"     step={step:5d}  samples={samples_seen:8,}  "
+                      f"val_ppl={ppl:7.1f}  val_loss={vl:.4f}  "
+                      f"lr={cur_lr:.2e}  wall={wall/60:.1f}min  "
+                      f"opt={np.mean(opt_times[-20:])*1000:.1f}ms")
+
+        avg_power = power_mon.stop()
+        peak_mem  = gpu_memory_gb()
+        result = dict(
+            task="transformer", **cfg,
+            lr_final=scheduler.get_last_lr()[0],
+            steps=step, samples=samples_seen,
+            wall_s=time.perf_counter()-t0,
+            avg_fwdbwd_ms=np.mean(fwdbwd_times)*1000,
+            avg_opt_ms=np.mean(opt_times)*1000,
+            p99_opt_ms=np.percentile(opt_times, 99)*1000,
+            peak_mem_gb=peak_mem,
+            avg_power_w=avg_power,
+            final_val_ppl=curve_val_ppl[-1] if curve_val_ppl else None,
+            final_val_loss=curve_val_loss[-1] if curve_val_loss else None,
+            curve_steps=curve_steps, curve_samples=curve_samples,
+            curve_times=curve_times, curve_val_ppl=curve_val_ppl,
+            curve_val_loss=curve_val_loss,
+        )
+        all_results.append(result)
+        save_result_incremental(result, "transformer")
+        if hasattr(opt, 'cleanup'): opt.cleanup()
+
+    return all_results
+
+
 # ─── Scaling Benchmark ────────────────────────────────────────────────────
 
 def run_scaling_benchmark(device, args):
@@ -1095,10 +1406,12 @@ def print_summary(results):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", choices=["mlp","bert","cifar","scaling","all"], default="all")
+    parser.add_argument("--task", choices=["mlp","bert","cifar","scaling","transformer","all"], default="all")
     parser.add_argument("--max-steps-mlp",   type=int, default=3000)
     parser.add_argument("--max-steps-bert",  type=int, default=5000)
     parser.add_argument("--max-steps-cifar",   type=int, default=5000)
+    parser.add_argument("--max-steps-transformer", type=int, default=5000,
+                        help="Training steps for the from-scratch transformer task")
     parser.add_argument("--max-steps-scaling", type=int, default=300,
                         help="Convergence steps per optimizer per width in scaling task")
     parser.add_argument(
@@ -1141,6 +1454,12 @@ def main():
         if bert_results:
             print_summary(bert_results)
             make_plots(bert_results, "BERT-base SST-2")
+
+    if args.task in ("transformer","all"):
+        transformer_results = run_transformer_benchmark(device, args)
+        all_results.extend(transformer_results)
+        if transformer_results:
+            make_plots(transformer_results, "SmallGPT WikiText-2 (from scratch)")
 
     # Save combined results JSON (all runs together)
     if all_results:

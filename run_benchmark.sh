@@ -7,12 +7,13 @@
 #    bash run_benchmark.sh [options]
 #
 #  Options:
-#    --task          mlp|bert|cifar|scaling|all  (default: mlp)
-#                      mlp     — Large MLP on MNIST (~30 min)
-#                      cifar   — Deep MLP on CIFAR-10 (~20 min)
-#                      scaling — Width sweep: step-cost + convergence quality (~5-10 min)
-#                      bert    — BERT fine-tuning on SST-2 (~4-6 hrs, needs ≥12GB VRAM)
-#                      all     — Run all tasks in sequence
+#    --task          mlp|bert|cifar|scaling|transformer|all  (default: mlp)
+#                      mlp         — Large MLP on MNIST (~30 min)
+#                      cifar       — Deep MLP on CIFAR-10 (~20 min)
+#                      scaling     — Width sweep: step-cost + convergence (~5-10 min)
+#                      bert        — BERT fine-tuning on SST-2 (~4-6 hrs, needs ≥12GB VRAM)
+#                      transformer — Small GPT from scratch on WikiText-2 (~30-60 min)
+#                      all         — Run all tasks in sequence
 #    --skip          adam,classickfac,...    Comma-separated optimizers to skip
 #                    Valid names: adam, classickfac, olsveredkfac
 #    --steps-mlp     N                      Max steps for MLP task              (default: 3000)
@@ -46,6 +47,7 @@ STEPS_MLP=3000
 STEPS_BERT=8000
 STEPS_CIFAR=5000
 STEPS_SCALING=300
+STEPS_TRANSFORMER=5000
 USE_TMUX=true
 SESSION="benchmark"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,7 +66,8 @@ while [[ $# -gt 0 ]]; do
         --steps-mlp)     STEPS_MLP="$2";     shift 2 ;;
         --steps-bert)    STEPS_BERT="$2";    shift 2 ;;
         --steps-cifar)   STEPS_CIFAR="$2";   shift 2 ;;
-        --steps-scaling) STEPS_SCALING="$2"; shift 2 ;;
+        --steps-scaling)     STEPS_SCALING="$2";     shift 2 ;;
+        --steps-transformer) STEPS_TRANSFORMER="$2"; shift 2 ;;
         --no-tmux)    USE_TMUX=false;  shift   ;;
         --session)    SESSION="$2";    shift 2 ;;
         --help|-h)
@@ -78,8 +81,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate --task
-if [[ ! "$TASK" =~ ^(mlp|bert|cifar|scaling|all)$ ]]; then
-    error "--task must be mlp, bert, cifar, scaling, or all (got: $TASK)"
+if [[ ! "$TASK" =~ ^(mlp|bert|cifar|scaling|transformer|all)$ ]]; then
+    error "--task must be mlp, bert, cifar, scaling, transformer, or all (got: $TASK)"
     exit 1
 fi
 
@@ -148,6 +151,7 @@ PY_CMD+=" --max-steps-mlp ${STEPS_MLP}"
 PY_CMD+=" --max-steps-bert ${STEPS_BERT}"
 PY_CMD+=" --max-steps-cifar ${STEPS_CIFAR}"
 PY_CMD+=" --max-steps-scaling ${STEPS_SCALING}"
+PY_CMD+=" --max-steps-transformer ${STEPS_TRANSFORMER}"
 [[ -n "$SKIP" ]] && PY_CMD+=" --skip ${SKIP}"
 
 info "Command: ${PY_CMD}"
