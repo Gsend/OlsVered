@@ -928,28 +928,61 @@ def run_transformer_benchmark(device, args):
         train_loader = DataLoader(tokenized["train"], batch_size=cfg['B'],
                                   shuffle=True, collate_fn=collate, num_workers=2)
 
+        # For K-FAC optimizers, identify which parameters are covered by K-FAC
+        # (nn.Linear / nn.Conv2d with out_dim <= max_gram_dim) and which are not
+        # (Embedding, LayerNorm, LM head excluded via max_gram_dim).
+        # Non-K-FAC params must be updated by a secondary AdamW — without this,
+        # token embeddings (nn.Embedding) stay frozen at random init and the model
+        # cannot learn *anything* (ppl stuck at ~9999 from step 1).
+        _KFAC_MAX_DIM = 4096
+        if cfg['kfac']:
+            kfac_covered_ids = set()
+            for mod in model.modules():
+                if isinstance(mod, (nn.Linear, nn.Conv2d)):
+                    out_dim = (mod.out_features if isinstance(mod, nn.Linear)
+                               else mod.out_channels)
+                    if out_dim <= _KFAC_MAX_DIM:
+                        for p in mod.parameters():
+                            kfac_covered_ids.add(id(p))
+            # Collect unique non-K-FAC params (embeddings, LayerNorm, LM head)
+            seen_ids = set()
+            other_params = []
+            for p in model.parameters():
+                if id(p) not in kfac_covered_ids and id(p) not in seen_ids:
+                    other_params.append(p)
+                    seen_ids.add(id(p))
+            print(f"     K-FAC covers {len(kfac_covered_ids)} param tensors; "
+                  f"AdamW fallback covers {len(other_params)} "
+                  f"(embeddings / LM head / LayerNorm)")
+        else:
+            other_params = []
+
         if not cfg['kfac']:
             opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'],
                                     weight_decay=0.01)
+            emb_opt = None
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 5 if torch.cuda.is_available() else 20
             # max_gram_dim=4096: skip K-FAC hooks on the LM head (out=50257).
             # Its G matrix (50257×50257 ≈ 10 GB) would cause OOM.
-            # The head uses vanilla gradient descent; all other layers (max d=1024)
-            # are fully preconditioned by K-FAC.
+            # Embeddings + excluded head are updated by emb_opt (AdamW).
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=128,
                                adaptive_rank_budget=128, momentum=0.0,
                                grad_clip=1.0, gamma=0.95,
-                               max_gram_dim=4096)
+                               max_gram_dim=_KFAC_MAX_DIM)
+            emb_opt = torch.optim.AdamW(other_params, lr=cfg['lr'],
+                                        weight_decay=0.01)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
                               factor_update_freq=20, inv_update_freq=20,
                               momentum=0.0, grad_clip=1.0, gamma=0.9,
-                              max_gram_dim=4096)
+                              max_gram_dim=_KFAC_MAX_DIM)
+            emb_opt = torch.optim.AdamW(other_params, lr=cfg['lr'],
+                                        weight_decay=0.01)
 
         warmup       = 200
         cosine_steps = max(1, args.max_steps_transformer - warmup)
@@ -960,9 +993,13 @@ def run_transformer_benchmark(device, args):
                 torch.optim.lr_scheduler.CosineAnnealingLR(
                     opt, T_max=cosine_steps, eta_min=cfg['lr'] * 0.002),
             ], milestones=[warmup])
+            emb_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                emb_opt, T_max=args.max_steps_transformer,
+                eta_min=cfg['lr'] * 0.002)
         else:
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 opt, T_max=args.max_steps_transformer, eta_min=cfg['lr'] * 0.01)
+            emb_scheduler = None
 
         data_iter = iter(train_loader)
         power_mon  = PowerMonitor()
@@ -992,14 +1029,19 @@ def run_transformer_benchmark(device, args):
             logits = model(x)
             loss   = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)), y.reshape(-1))
-            opt.zero_grad(); loss.backward()
+            # Use model.zero_grad() so ALL params (incl. embeddings) are cleared
+            model.zero_grad(); loss.backward()
             t_fwd_done = time.perf_counter()
 
             t_opt = time.perf_counter()
             opt.step()
+            if emb_opt is not None:
+                emb_opt.step()
             t_opt_done = time.perf_counter()
 
             scheduler.step()
+            if emb_scheduler is not None:
+                emb_scheduler.step()
             power_mon.sample()
             fwdbwd_times.append(t_fwd_done - t_fwd)
             opt_times.append(t_opt_done - t_opt)
@@ -1021,6 +1063,8 @@ def run_transformer_benchmark(device, args):
                     eta_min   = cfg['lr'] * 0.002
                     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                         opt, T_max=remaining, eta_min=eta_min)
+                    emb_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        emb_opt, T_max=remaining, eta_min=eta_min)
                     if hasattr(opt, 'damping'):
                         opt.damping = max(1e-4, opt.damping * 0.1)
                     print(f"     *** ppl < {PPL_DECAY_THRESHOLD:.0f} — "
