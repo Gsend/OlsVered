@@ -103,6 +103,7 @@ class OlsveredKFAC(torch.optim.Optimizer):
         adaptive_rank_budget: int = 64,
         grad_clip: Optional[float] = None,
         gamma: float = 0.0,
+        max_gram_dim: int = 0,
     ):
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -131,7 +132,7 @@ class OlsveredKFAC(torch.optim.Optimizer):
         self.layer_ranks_: Dict[nn.Module, Tuple[Optional[int], Optional[int]]] = {}
 
         # Hook infrastructure
-        self.hooks = KFACHooks(model)
+        self.hooks = KFACHooks(model, max_gram_dim=max_gram_dim)
         self.hooks.enable()
 
         # Cached factors and eigen decompositions.

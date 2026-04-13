@@ -934,16 +934,22 @@ def run_transformer_benchmark(device, args):
         elif cfg['randomised']:
             from optimizer.olsvered_kfac import OlsveredKFAC
             evd_freq = 5 if torch.cuda.is_available() else 20
+            # max_gram_dim=4096: skip K-FAC hooks on the LM head (out=50257).
+            # Its G matrix (50257×50257 ≈ 10 GB) would cause OOM.
+            # The head uses vanilla gradient descent; all other layers (max d=1024)
+            # are fully preconditioned by K-FAC.
             opt = OlsveredKFAC(model, lr=cfg['lr'], damping=1e-3,
                                factor_update_freq=20, inv_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=128,
                                adaptive_rank_budget=128, momentum=0.0,
-                               grad_clip=1.0, gamma=0.95)
+                               grad_clip=1.0, gamma=0.95,
+                               max_gram_dim=4096)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
                               factor_update_freq=20, inv_update_freq=20,
-                              momentum=0.0, grad_clip=1.0, gamma=0.9)
+                              momentum=0.0, grad_clip=1.0, gamma=0.9,
+                              max_gram_dim=4096)
 
         warmup       = 200
         cosine_steps = max(1, args.max_steps_transformer - warmup)

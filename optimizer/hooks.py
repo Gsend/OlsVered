@@ -81,8 +81,21 @@ class KFACHooks:
         hooks.remove()
     """
 
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module, max_gram_dim: int = 0):
+        """
+        Parameters
+        ----------
+        model : nn.Module
+        max_gram_dim : int
+            If > 0, skip K-FAC hooks on any Linear/Conv2d layer whose output
+            dimension (out_features / out_channels) exceeds this value.
+            Those layers fall back to vanilla gradient descent.
+            Useful for LM head layers with vocab-sized output (e.g. 50 257)
+            whose G Gram matrix would be ~10 GB and cause OOM.
+            Default: 0 (disabled — all layers are tracked).
+        """
         self.model = model
+        self.max_gram_dim = max_gram_dim
         self._handles: List[torch.utils.hooks.RemovableHook] = []
 
         # Running Gram sums, accumulated across steps.
@@ -99,6 +112,12 @@ class KFACHooks:
 
         for module in model.modules():
             if isinstance(module, (nn.Linear, nn.Conv2d)):
+                if max_gram_dim > 0:
+                    # Check output dimension
+                    out_dim = (module.out_features if isinstance(module, nn.Linear)
+                               else module.out_channels)
+                    if out_dim > max_gram_dim:
+                        continue   # skip — G would be out_dim² → OOM
                 self._linear_layers.append(module)
 
     @property

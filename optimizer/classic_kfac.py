@@ -58,6 +58,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         momentum: float = 0.9,
         grad_clip: Optional[float] = None,
         gamma: float = 0.0,
+        max_gram_dim: int = 0,
     ):
         print( 'factor_update_freq:', factor_update_freq,
         'inv_update_freq:' ,inv_update_freq)
@@ -76,7 +77,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         self.grad_clip = grad_clip
         self.gamma = gamma
 
-        self.hooks = KFACHooks(model)
+        self.hooks = KFACHooks(model, max_gram_dim=max_gram_dim)
         self.hooks.enable()
 
         self._factors: Dict[nn.Module, Tuple[torch.Tensor, torch.Tensor]] = {}
