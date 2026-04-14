@@ -49,6 +49,24 @@ import torch.nn as nn
 from optimizer.backend import lu_solve_gram
 
 # ---------------------------------------------------------------------------
+# Forward-pass helpers — handle plain tensors and dict inputs (transformers)
+# ---------------------------------------------------------------------------
+
+def _to_device(batch_x, device: torch.device):
+    """Move batch_x to device, preserving dtype (token IDs must stay Long)."""
+    if isinstance(batch_x, dict):
+        return {k: v.to(device) for k, v in batch_x.items()}
+    return batch_x.to(device)
+
+
+def _model_forward(model: torch.nn.Module, batch_x):
+    """Call model(batch_x) or model(**batch_x) for dict inputs (e.g. BERT)."""
+    if isinstance(batch_x, dict):
+        return model(**batch_x)
+    return model(batch_x)
+
+
+# ---------------------------------------------------------------------------
 # Internal state containers
 # ---------------------------------------------------------------------------
 
@@ -319,12 +337,14 @@ class OlsSMLayerRetrainer:
         gram = self._grams[0]
 
         for batch_x, batch_y in dataloader:
-            batch_x = batch_x.to(self.device, dtype=self.dtype)
+            # Move to device but preserve original dtype — token IDs must stay Long,
+            # float inputs stay float.  Hooks cast captured activations to self.dtype.
+            batch_x = _to_device(batch_x, self.device)
             batch_y = batch_y.to(self.device)  # keep original dtype for target_fn
 
             with torch.no_grad():
                 self._act_cache.clear()
-                self.model(batch_x)   # populates self._act_cache[0]
+                _model_forward(self.model, batch_x)   # populates self._act_cache[0]
 
             x_in = self._act_cache.get(0)
             if x_in is None:
@@ -382,13 +402,13 @@ class OlsSMLayerRetrainer:
 
         # ── Dataset pass: accumulate Gram matrices ────────────────────────────
         for batch_x, batch_y in dataloader:
-            batch_x = batch_x.to(self.device, dtype=self.dtype)
+            batch_x = _to_device(batch_x, self.device)
             batch_y = batch_y.to(self.device)  # keep original dtype for target_fn
 
             # Full forward pass → activation hooks fire → fill _act_cache
             self._act_cache.clear()
             with torch.no_grad():
-                self.model(batch_x)
+                _model_forward(self.model, batch_x)
 
             # Compute targets for each retrained layer via backward propagation
             targets_list = self._backward_propagate_targets(
@@ -474,12 +494,12 @@ class OlsSMLayerRetrainer:
 
             # ── Accumulate residual statistics ────────────────────────────────
             for batch_x, batch_y in dataloader:
-                batch_x = batch_x.to(self.device, dtype=self.dtype)
+                batch_x = _to_device(batch_x, self.device)
                 batch_y = batch_y.to(self.device)  # keep original dtype for target_fn
 
                 self._act_cache.clear()
                 with torch.no_grad():
-                    self.model(batch_x)
+                    _model_forward(self.model, batch_x)
 
                 targets_list = self._backward_propagate_targets(
                     target_fn(batch_y).to(self.device, dtype=self.dtype),

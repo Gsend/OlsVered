@@ -515,22 +515,24 @@ def run_ols(
     print(f"  Retraining {actual_n} of {n_linear} Linear layers  "
           f"({'+ LoRA r=' + str(lora_rank) if lora_rank else 'pure OLS'})")
 
-    # Build a simple loader that yields (x, y) as flat tensors for the retrainer.
-    # The retrainer expects (batch_x, batch_y); we wrap the HF loader.
+    # Wrap the HF loader so the retrainer receives:
+    #   batch_x = {'input_ids': LongTensor, 'attention_mask': LongTensor}
+    #   batch_y = LongTensor (class labels)
+    # The retrainer's _model_forward helper unpacks the dict via model(**batch_x),
+    # preserving token dtypes (Long) that BERT's embedding layer requires.
     class HFLoaderAdapter:
-        """Wraps an HF dataloader to yield (input_ids, labels) tuples."""
+        """Wraps an HF dataloader to yield (dict_inputs, labels) tuples."""
         def __init__(self, loader):
             self._loader = loader
         def __iter__(self):
             for batch in self._loader:
-                yield batch["input_ids"].to(device), batch["labels"].to(device)
+                x = {
+                    "input_ids":      batch["input_ids"].to(device),
+                    "attention_mask": batch["attention_mask"].to(device),
+                }
+                yield x, batch["labels"].to(device)
         def __len__(self):
             return len(self._loader)
-
-    # BERT's embedding takes input_ids and produces (B, seq, d_model).
-    # The retrainer needs to hook into nn.Linear layers.
-    # We run the full model forward so activations flow through all layers.
-    # Override model.forward so retrainer's hooks fire on the right layers.
 
     _reset_peak(device)
     t0 = time.time()
