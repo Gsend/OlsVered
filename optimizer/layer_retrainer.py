@@ -171,8 +171,13 @@ class OlsSMLayerRetrainer:
         max_gram_dim: int = 0,
         device: Optional[torch.device] = None,
         dtype: torch.dtype = torch.float32,
+        bcd_mode: str = "jacobi",
         verbose: bool = True,
     ):
+        if bcd_mode not in ("jacobi", "gauss_seidel"):
+            raise ValueError(
+                f"bcd_mode must be 'jacobi' or 'gauss_seidel', got {bcd_mode!r}"
+            )
         self.model = model
         self.lambda_reg = lambda_reg
         self.max_sweeps = max_sweeps
@@ -180,6 +185,7 @@ class OlsSMLayerRetrainer:
         self.lora_rank = lora_rank
         self.lora_lambda = lora_lambda if lora_lambda is not None else lambda_reg
         self.lora_sweeps = lora_sweeps
+        self.bcd_mode = bcd_mode
         self.verbose = verbose
         self.device = device or next(model.parameters()).device
         self.dtype = dtype
@@ -296,8 +302,12 @@ class OlsSMLayerRetrainer:
             return self._single_layer_retrain(dataloader, target_fn)
 
         # ── BCD loop ─────────────────────────────────────────────────────────
+        _sweep_fn = (self._bcd_sweep_gauss_seidel
+                     if self.bcd_mode == "gauss_seidel"
+                     else self._bcd_sweep)
+
         for sweep in range(self.max_sweeps):
-            deltas = self._bcd_sweep(dataloader, target_fn)
+            deltas = _sweep_fn(dataloader, target_fn)
             history["deltas"].append(deltas)
             history["n_sweeps"] += 1
 
@@ -313,12 +323,15 @@ class OlsSMLayerRetrainer:
                     print(f"  → Converged (tol={self.tol:.1e})")
                 break
 
-        # ── Final output-layer solve ──────────────────────────────────────────
+        # ── Final output-layer solve (Jacobi only) ────────────────────────────
         # Jacobi BCD updates all layers simultaneously; the output layer may
         # not be optimally fitted to the representations the other layers
         # settled on.  One clean single-layer OLS pass with ground-truth
         # targets anchors the classifier and prevents oscillation.
-        self._final_output_layer_solve(dataloader, target_fn)
+        # Gauss-Seidel already ends with the last layer solved last, so this
+        # step is redundant there and is skipped.
+        if self.bcd_mode == "jacobi":
+            self._final_output_layer_solve(dataloader, target_fn)
 
         # ── OLS + LoRA residual stage ─────────────────────────────────────────
         if self.lora_rank > 0:
@@ -494,6 +507,70 @@ class OlsSMLayerRetrainer:
                 )
                 deltas.append(0.0)
                 continue
+            old_W = layer.weight.data.clone()
+            self._solve_and_update(i)
+            delta = (layer.weight.data - old_W).abs().max().item()
+            deltas.append(delta)
+
+        return deltas
+
+    def _bcd_sweep_gauss_seidel(
+        self,
+        dataloader: Iterable,
+        target_fn: Callable,
+    ) -> List[float]:
+        """One Gauss-Seidel BCD sweep: solve and immediately update each layer.
+
+        Iterates layers 0 → N-1.  After layer i is updated, layer i+1's
+        forward pass sees the new weights — so each layer benefits from all
+        earlier updates made in the same sweep.
+
+        Cost: N full dataset passes per sweep (vs 1 for Jacobi).
+        Benefit: monotone convergence — max|ΔW| is guaranteed to decrease.
+        The last layer is always solved last with ground-truth targets, so
+        no separate _final_output_layer_solve is needed.
+        """
+        deltas = []
+
+        for i, layer in enumerate(self._retrained_layers):
+            self._grams[i].reset()
+
+            # Snapshot weights at the start of solving this layer.
+            # For the backward target projection we need the CURRENT weights
+            # of layers i+1..N-1 (not yet updated in this sweep).
+            weight_snapshot = [
+                l.weight.data.clone() for l in self._retrained_layers
+            ]
+
+            for batch_x, batch_y in dataloader:
+                batch_x = _to_device(batch_x, self.device)
+                batch_y = batch_y.to(self.device)
+
+                # Full forward pass — activations for ALL layers captured,
+                # but we only use layer i here.
+                self._act_cache.clear()
+                with torch.no_grad():
+                    _model_forward(self.model, batch_x)
+
+                x_in = self._act_cache.get(i)
+                if x_in is None:
+                    continue
+
+                # Compute target for layer i via backward projection through
+                # layers i+1..N-1 using their current (not-yet-updated) weights.
+                targets_list = self._backward_propagate_targets(
+                    target_fn(batch_y).to(self.device, dtype=self.dtype),
+                    weight_snapshot,
+                )
+                t = targets_list[i].to(self.device, dtype=self.dtype)
+                if x_in.ndim == 3:
+                    T = x_in.shape[1]
+                    t = t.unsqueeze(1).expand(-1, T, -1).reshape(-1, t.shape[-1])
+
+                x_aug = self._augment(x_in, layer)
+                self._grams[i].accumulate(x_aug, t)
+
+            # Solve and immediately apply — next layer sees the update.
             old_W = layer.weight.data.clone()
             self._solve_and_update(i)
             delta = (layer.weight.data - old_W).abs().max().item()
@@ -772,6 +849,7 @@ class OlsSMLayerRetrainer:
         lines = [
             f"OlsSMLayerRetrainer",
             f"  n_layers    : {self.n_layers}",
+            f"  bcd_mode    : {self.bcd_mode}",
             f"  lambda_reg  : {self.lambda_reg}",
             f"  max_sweeps  : {self.max_sweeps}  (tol={self.tol})",
             f"  lora_rank   : {self.lora_rank}"

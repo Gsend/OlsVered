@@ -477,6 +477,7 @@ def run_ols(
     max_sweeps: int = 5,
     lambda_reg: float = 1e-4,
     num_labels: int = 2,
+    bcd_mode: str = "gauss_seidel",
 ) -> ModeResult:
     """OlsSMLayerRetrainer — BCD with optional LoRA residual stage."""
     if lora_rank > 0:
@@ -509,6 +510,7 @@ def run_ols(
         tol=1e-5,
         lora_rank=lora_rank,
         lora_sweeps=3,
+        bcd_mode=bcd_mode,
         verbose=True,
     )
     n_train, n_total = count_trainable(model)
@@ -723,6 +725,12 @@ def parse_args():
     p.add_argument("--lora-lr",     type=float, default=3e-4)
     p.add_argument("--device",      default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--output-dir",  default=str(OUT))
+    p.add_argument("--bcd-mode",    default="gauss_seidel",
+                   choices=["jacobi", "gauss_seidel"],
+                   help="BCD variant for OLS modes: jacobi (default) or gauss_seidel. "
+                        "gauss_seidel updates each layer immediately so subsequent "
+                        "layers see the correction; costs N forward passes per sweep "
+                        "instead of 1, but converges monotonically.")
     p.add_argument("--no-plots",    action="store_true")
     p.add_argument("--tag",         default="",
                    help="Optional tag appended to output filenames")
@@ -814,35 +822,42 @@ def main():
             elif mode == "ols_n1":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=1, max_sweeps=1, lambda_reg=args.lambda_reg,
-                            num_labels=num_labels)
+                            num_labels=num_labels, bcd_mode=args.bcd_mode)
             elif mode == "ols_n2":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=2, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             elif mode == "ols_n4":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=4, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             elif mode == "ols_n8":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=8, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             elif mode == "ols_all":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=-1, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             elif mode == "ols_lora_r2":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=2, lora_rank=2, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             elif mode == "ols_lora_r4":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=2, lora_rank=4, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             elif mode == "ols_lora_r8":
                 r = run_ols(model_init, train_loader, eval_loader, device,
                             n_layers=2, lora_rank=8, max_sweeps=args.max_sweeps,
-                            lambda_reg=args.lambda_reg, num_labels=num_labels)
+                            lambda_reg=args.lambda_reg, num_labels=num_labels,
+                            bcd_mode=args.bcd_mode)
             else:
                 raise ValueError(f"Unknown mode: {mode}")
 
