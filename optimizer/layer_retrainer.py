@@ -313,6 +313,13 @@ class OlsSMLayerRetrainer:
                     print(f"  → Converged (tol={self.tol:.1e})")
                 break
 
+        # ── Final output-layer solve ──────────────────────────────────────────
+        # Jacobi BCD updates all layers simultaneously; the output layer may
+        # not be optimally fitted to the representations the other layers
+        # settled on.  One clean single-layer OLS pass with ground-truth
+        # targets anchors the classifier and prevents oscillation.
+        self._final_output_layer_solve(dataloader, target_fn)
+
         # ── OLS + LoRA residual stage ─────────────────────────────────────────
         if self.lora_rank > 0:
             if self.verbose:
@@ -384,6 +391,53 @@ class OlsSMLayerRetrainer:
 
         return history
 
+    def _final_output_layer_solve(
+        self,
+        dataloader: Iterable,
+        target_fn: Callable,
+    ) -> float:
+        """Re-solve the last retrained layer with ground-truth targets.
+
+        Called unconditionally after every BCD loop.  Jacobi-style BCD solves
+        all layers in parallel using a weight snapshot from the start of each
+        sweep, so the output layer's solution may be stale by the time hidden
+        layers finish updating.  This final single-layer OLS pass uses the
+        current (post-BCD) activations and the actual labels to guarantee the
+        best possible output layer.
+
+        Returns max|ΔW| of the re-solve.
+        """
+        i = len(self._retrained_layers) - 1
+        layer = self._retrained_layers[i]
+        gram = self._grams[i]
+        gram.reset()
+
+        for batch_x, batch_y in dataloader:
+            batch_x = _to_device(batch_x, self.device)
+            batch_y = batch_y.to(self.device)
+
+            self._act_cache.clear()
+            with torch.no_grad():
+                _model_forward(self.model, batch_x)
+
+            x_in = self._act_cache.get(i)
+            if x_in is None:
+                continue
+
+            x_aug = self._augment(x_in, layer)
+            y = target_fn(batch_y).to(self.device, dtype=self.dtype)
+            if x_in.ndim == 3:
+                T = x_in.shape[1]
+                y = y.unsqueeze(1).expand(-1, T, -1).reshape(-1, y.shape[-1])
+            gram.accumulate(x_aug, y)
+
+        old_W = layer.weight.data.clone()
+        self._solve_and_update(i)
+        delta = (layer.weight.data - old_W).abs().max().item()
+        if self.verbose:
+            print(f"[BCD final]  Output layer re-solved.  max|ΔW| = {delta:.2e}")
+        return delta
+
     def _bcd_sweep(
         self,
         dataloader: Iterable,
@@ -422,8 +476,12 @@ class OlsSMLayerRetrainer:
                 if x_in is None:
                     continue
                 x_aug = self._augment(x_in, layer)
-                targets_list[i] = targets_list[i].to(self.device, dtype=self.dtype)
-                self._grams[i].accumulate(x_aug, targets_list[i])
+                t = targets_list[i].to(self.device, dtype=self.dtype)
+                # _augment folds (B, T, d) → (B*T, d+1); tile targets to match.
+                if x_in.ndim == 3:
+                    T = x_in.shape[1]
+                    t = t.unsqueeze(1).expand(-1, T, -1).reshape(-1, t.shape[-1])
+                self._grams[i].accumulate(x_aug, t)
 
         # ── Solve and update each layer ───────────────────────────────────────
         deltas = []
@@ -510,11 +568,16 @@ class OlsSMLayerRetrainer:
                     x_in = self._act_cache.get(i)
                     if x_in is None:
                         continue
-                    x = x_in.reshape(x_in.shape[0], -1)        # (B, d_in)
+                    # Flatten sequence dim: (B, T, d) → (B*T, d) or keep (B, d)
+                    x = x_in.reshape(-1, x_in.shape[-1])
                     y = targets_list[i].to(self.device, dtype=self.dtype)
+                    # Tile targets to match flattened sequence positions
+                    if x_in.ndim == 3:
+                        T = x_in.shape[1]
+                        y = y.unsqueeze(1).expand(-1, T, -1).reshape(-1, y.shape[-1])
 
                     # Residual: ΔY = Y - W_ols @ X
-                    delta_y = y - x @ layer.weight.data.T       # (B, d_out)
+                    delta_y = y - x @ layer.weight.data.T       # (B*T, d_out)
                     if layer.bias is not None:
                         delta_y = delta_y - layer.bias.data.unsqueeze(0)
 
