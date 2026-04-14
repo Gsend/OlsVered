@@ -1,13 +1,22 @@
 # OlsSM — Python dependencies
 # Install with:  pip install -r requirements.txt
-   # needed for training_benchmark.py (MNIST download)
+#
+# NOTE: PyTorch is NOT listed here because the correct wheel depends on your
+# CUDA version.  run_benchmark.sh installs torch automatically with the right
+# index URL.  For a manual install see:
+#   https://pytorch.org/get-started/locally/
 
 # ── Numerical / scientific stack ──────────────────────────────────────────────
 numpy>=1.24.0
 scipy>=1.10.0               # lu_factor / lu_solve fallback in backend.py
 
-# ── Visualisation (optional — only needed for benchmark plots) ────────────────
-matplotlib>=3.7.0
+# ── Visualisation ─────────────────────────────────────────────────────────────
+matplotlib>=3.7.0           # benchmark plots
 
-# ── Rust build tooling (only needed if building the Rust extension from source)─
-# maturin>=1.0.0            # uncomment if building olssm wheel locally
+# ── HuggingFace stack (BERT / transformer benchmarks) ────────────────────────
+transformers>=4.38.0
+datasets>=2.18.0
+accelerate>=0.27.0          # optional but avoids HF deprecation warnings
+
+# ── Build tooling ─────────────────────────────────────────────────────────────
+maturin>=1.5,<2.0           # compiles the Rust extension (olssm)
