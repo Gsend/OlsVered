@@ -209,11 +209,19 @@ class OlsSMLayerRetrainer:
         self.n_layers = n_layers
         self._retrained_layers: List[nn.Linear] = all_linear[-n_layers:]
 
+        # ── Detect activations that follow each retrained layer ──────────────
+        # Used in target back-propagation to apply the correct inverse activation
+        # so OLS solves for pre-activation targets rather than post-activation.
+        self._layer_activations: Dict[int, Optional[nn.Module]] = \
+            self._detect_following_activations()
+
         if self.verbose:
             print(f"[OlsSMLayerRetrainer] Retraining {n_layers} layer(s):")
             for i, layer in enumerate(self._retrained_layers):
+                act = self._layer_activations.get(i)
+                act_str = f"  → {type(act).__name__}" if act is not None else ""
                 print(f"  [{i}] Linear({layer.in_features} → {layer.out_features}"
-                      f"{', bias' if layer.bias is not None else ''})")
+                      f"{', bias' if layer.bias is not None else ''}){act_str}")
 
         # ── Gram accumulators (one per retrained layer) ──────────────────────
         self._grams: List[GramState] = []
@@ -488,12 +496,14 @@ class OlsSMLayerRetrainer:
                 x_in = self._act_cache.get(i)
                 if x_in is None:
                     continue
-                x_aug = self._augment(x_in, layer)
+                x_aug = self._augment(x_in, layer)          # (N, d_in+1)
                 t = targets_list[i].to(self.device, dtype=self.dtype)
-                # _augment folds (B, T, d) → (B*T, d+1); tile targets to match.
-                if x_in.ndim == 3:
-                    T = x_in.shape[1]
-                    t = t.unsqueeze(1).expand(-1, T, -1).reshape(-1, t.shape[-1])
+                # Tile targets if batch dims don't match — happens when x_in
+                # was 3D (B,T,d) and _backward_propagate_targets hasn't already
+                # tiled (e.g. last layer whose target comes straight from target_fn).
+                if t.shape[0] != x_aug.shape[0]:
+                    ratio = x_aug.shape[0] // t.shape[0]
+                    t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
                 self._grams[i].accumulate(x_aug, t)
 
         # ── Solve and update each layer ───────────────────────────────────────
@@ -563,11 +573,10 @@ class OlsSMLayerRetrainer:
                     weight_snapshot,
                 )
                 t = targets_list[i].to(self.device, dtype=self.dtype)
-                if x_in.ndim == 3:
-                    T = x_in.shape[1]
-                    t = t.unsqueeze(1).expand(-1, T, -1).reshape(-1, t.shape[-1])
-
                 x_aug = self._augment(x_in, layer)
+                if t.shape[0] != x_aug.shape[0]:
+                    ratio = x_aug.shape[0] // t.shape[0]
+                    t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
                 self._grams[i].accumulate(x_aug, t)
 
             # Solve and immediately apply — next layer sees the update.
@@ -648,10 +657,11 @@ class OlsSMLayerRetrainer:
                     # Flatten sequence dim: (B, T, d) → (B*T, d) or keep (B, d)
                     x = x_in.reshape(-1, x_in.shape[-1])
                     y = targets_list[i].to(self.device, dtype=self.dtype)
-                    # Tile targets to match flattened sequence positions
-                    if x_in.ndim == 3:
-                        T = x_in.shape[1]
-                        y = y.unsqueeze(1).expand(-1, T, -1).reshape(-1, y.shape[-1])
+                    # Tile targets if batch dims don't match (same mismatch
+                    # logic used everywhere — avoids double-tiling).
+                    if y.shape[0] != x.shape[0]:
+                        ratio = x.shape[0] // y.shape[0]
+                        y = y.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, y.shape[-1])
 
                     # Residual: ΔY = Y - W_ols @ X
                     delta_y = y - x @ layer.weight.data.T       # (B*T, d_out)
@@ -715,6 +725,161 @@ class OlsSMLayerRetrainer:
                           f"‖BA‖ = {delta_W.norm().item():.3e}")
 
     # -----------------------------------------------------------------------
+    # Activation detection + inverse
+    # -----------------------------------------------------------------------
+
+    #: Activation module types we can invert (exactly or approximately).
+    _ACTIVATION_TYPES = (
+        nn.Tanh, nn.ReLU, nn.ReLU6,
+        nn.GELU, nn.SiLU, nn.Sigmoid,
+        nn.LeakyReLU, nn.ELU,
+    )
+    #: Module types that stop the lookahead (definitely not an activation).
+    _STOP_TYPES = (
+        nn.Linear, nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d,
+        nn.Embedding, nn.Conv1d, nn.Conv2d,
+    )
+    #: Module types we skip over when scanning (transparent pass-throughs).
+    _SKIP_TYPES = (nn.Dropout,)
+
+    def _detect_following_activations(self) -> Dict[int, Optional[nn.Module]]:
+        """For each retrained layer, find the activation module that immediately
+        follows it in the model's depth-first module traversal.
+
+        Used so that ``_backward_propagate_targets`` can apply the correct
+        inverse (arctanh, ReLU mask, etc.) when propagating targets back
+        through non-linear layers.
+
+        Returns
+        -------
+        dict mapping layer index → activation module (or None).
+        """
+        modules_list = list(self.model.modules())
+        result: Dict[int, Optional[nn.Module]] = {}
+
+        for i, retrained in enumerate(self._retrained_layers):
+            pos = next(
+                (j for j, m in enumerate(modules_list) if m is retrained), None
+            )
+            result[i] = None
+            if pos is None:
+                continue
+
+            for j in range(pos + 1, min(pos + 8, len(modules_list))):
+                m = modules_list[j]
+                if isinstance(m, self._ACTIVATION_TYPES):
+                    result[i] = m
+                    break
+                if isinstance(m, self._STOP_TYPES):
+                    break
+                if isinstance(m, self._SKIP_TYPES):
+                    continue          # transparent — keep looking
+                if len(list(m.children())) > 0:
+                    continue          # container module — skip into it
+                break                 # unknown leaf — stop
+
+        return result
+
+    def _compute_pre_activation(
+        self,
+        layer: nn.Linear,
+        x_flat: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return the pre-activation value for ``layer`` given flat input.
+
+        Parameters
+        ----------
+        layer   : the nn.Linear whose pre-activation we want
+        x_flat  : (N, d_in) — flattened input activations (already on device)
+
+        Returns
+        -------
+        (N, d_out) pre-activation tensor (W @ x + b).
+        """
+        pre = x_flat @ layer.weight.data.T
+        if layer.bias is not None:
+            pre = pre + layer.bias.data
+        return pre
+
+    def _inverse_activation(
+        self,
+        t: torch.Tensor,
+        layer_idx: int,
+        x_flat: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map a post-activation target back through the inverse activation.
+
+        For each activation type:
+
+        * **Tanh** — exact inverse: ``arctanh(t)``, clipped to (−0.9999, 0.9999).
+        * **Sigmoid** — exact inverse: ``logit(t)``, clipped to (0.0001, 0.9999).
+        * **ReLU / ReLU6** — conditional inverse using the pre-activation sign:
+          active neurons (pre > 0) get ``t`` as the target;
+          dead neurons keep their current pre-activation value so OLS does not
+          try to drive them through a gate that is closed at this data point.
+        * **GELU / SiLU** — same conditional approach with the inflection
+          threshold (GELU ≈ −0.17; SiLU ≈ −1.28).
+        * **LeakyReLU / ELU** — conditional inverse using the pre-activation sign;
+          active side is identity, negative side scales/shifts back.
+        * **Unknown / None** — pass through unchanged.
+
+        Parameters
+        ----------
+        t         : (N, d_out) backward-projected target (post-activation space).
+        layer_idx : index in ``self._retrained_layers``.
+        x_flat    : (N, d_in) flattened input to the linear layer.
+
+        Returns
+        -------
+        (N, d_out) target in pre-activation (linear output) space.
+        """
+        act = self._layer_activations.get(layer_idx)
+        if act is None:
+            return t
+
+        if isinstance(act, nn.Tanh):
+            return torch.arctanh(torch.clamp(t, -0.9999, 0.9999))
+
+        if isinstance(act, nn.Sigmoid):
+            t_c = torch.clamp(t, 1e-4, 1 - 1e-4)
+            return torch.log(t_c / (1.0 - t_c))
+
+        # For mask-based inverses we need the pre-activation
+        layer = self._retrained_layers[layer_idx]
+        pre = self._compute_pre_activation(layer, x_flat)   # (N, d_out)
+
+        if isinstance(act, (nn.ReLU, nn.ReLU6)):
+            mask = (pre > 0).to(t.dtype)
+            return t * mask + pre.detach() * (1.0 - mask)
+
+        if isinstance(act, nn.GELU):
+            # GELU is monotonically increasing for x > ≈ −0.17
+            mask = (pre > -0.17).to(t.dtype)
+            return t * mask + pre.detach() * (1.0 - mask)
+
+        if isinstance(act, nn.SiLU):
+            # SiLU is monotonically increasing for x > ≈ −1.28
+            mask = (pre > -1.28).to(t.dtype)
+            return t * mask + pre.detach() * (1.0 - mask)
+
+        if isinstance(act, nn.LeakyReLU):
+            neg_slope = act.negative_slope
+            mask = (pre > 0).to(t.dtype)
+            # active: z = t;  inactive: z = t / neg_slope
+            return t * mask + (t / (neg_slope + 1e-9)) * (1.0 - mask)
+
+        if isinstance(act, nn.ELU):
+            alpha = act.alpha
+            # active: z = t;  inactive: z = log(t/alpha + 1)  (ELU⁻¹)
+            mask = (pre > 0).to(t.dtype)
+            safe_t = torch.clamp(t, -alpha + 1e-6)   # t > -alpha to keep log valid
+            inactive_inv = torch.log(safe_t / (alpha + 1e-9) + 1.0)
+            return t * mask + inactive_inv * (1.0 - mask)
+
+        # Unknown activation type — pass through unchanged
+        return t
+
+    # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------
 
@@ -758,7 +923,23 @@ class OlsSMLayerRetrainer:
 
         for i in range(N - 2, -1, -1):
             W = weight_snapshot[i + 1]   # (d_out, d_in) of the NEXT layer
-            targets_list[i] = self._pseudo_inverse_project(W, targets_list[i + 1])
+            # Project backward through the linear pseudo-inverse.
+            # This gives us the target in post-activation space for layer i.
+            t = self._pseudo_inverse_project(W, targets_list[i + 1])
+
+            # Map from post-activation space to pre-activation (linear output)
+            # space so that OLS solves for W*x, not activation(W*x).
+            # Uses the activation pattern captured in self._act_cache[i].
+            x_cached = self._act_cache.get(i)
+            if x_cached is not None:
+                x_flat = x_cached.reshape(-1, x_cached.shape[-1])
+                # Tile t to match x_flat if activation was sequence-wise
+                if x_cached.ndim == 3:
+                    T = x_cached.shape[1]
+                    t = t.unsqueeze(1).expand(-1, T, -1).reshape(-1, t.shape[-1])
+                t = self._inverse_activation(t, i, x_flat)
+
+            targets_list[i] = t
 
         return targets_list  # type: ignore[return-value]
 
@@ -855,12 +1036,15 @@ class OlsSMLayerRetrainer:
             f"  lora_rank   : {self.lora_rank}"
             + (f"  (lora_sweeps={self.lora_sweeps})" if self.lora_rank > 0 else "  (disabled)"),
             f"  device/dtype: {self.device} / {self.dtype}",
-            f"  layers:",
+            f"  layers (with detected following activation):",
         ]
         for i, layer in enumerate(self._retrained_layers):
+            act = self._layer_activations.get(i)
+            act_str = f" → {type(act).__name__}" if act is not None else " → (linear)"
             lines.append(
                 f"    [{i}] Linear({layer.in_features} → {layer.out_features}"
                 + (", bias)" if layer.bias is not None else ")")
+                + act_str
             )
         return "\n".join(lines)
 
