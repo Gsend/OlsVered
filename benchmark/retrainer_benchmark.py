@@ -477,7 +477,8 @@ def run_ols(
     max_sweeps: int = 5,
     lambda_reg: float = 1e-4,
     num_labels: int = 2,
-    bcd_mode: str = "gauss_seidel",
+    # bcd_mode: str = "gauss_seidel",
+    bcd_mode: str = "jacobi",
 ) -> ModeResult:
     """OlsSMLayerRetrainer — BCD with optional LoRA residual stage."""
     if lora_rank > 0:

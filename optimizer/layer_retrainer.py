@@ -172,6 +172,7 @@ class OlsSMLayerRetrainer:
         device: Optional[torch.device] = None,
         dtype: torch.dtype = torch.float32,
         bcd_mode: str = "jacobi",
+        residual_mode: bool = True,
         verbose: bool = True,
     ):
         if bcd_mode not in ("jacobi", "gauss_seidel"):
@@ -186,6 +187,7 @@ class OlsSMLayerRetrainer:
         self.lora_lambda = lora_lambda if lora_lambda is not None else lambda_reg
         self.lora_sweeps = lora_sweeps
         self.bcd_mode = bcd_mode
+        self.residual_mode = residual_mode
         self.verbose = verbose
         self.device = device or next(model.parameters()).device
         self.dtype = dtype
@@ -216,7 +218,8 @@ class OlsSMLayerRetrainer:
             self._detect_following_activations()
 
         if self.verbose:
-            print(f"[OlsSMLayerRetrainer] Retraining {n_layers} layer(s):")
+            mode_str = f"bcd={bcd_mode}" + (" residual" if residual_mode else " full-replace")
+            print(f"[OlsSMLayerRetrainer] Retraining {n_layers} layer(s)  [{mode_str}]:")
             for i, layer in enumerate(self._retrained_layers):
                 act = self._layer_activations.get(i)
                 act_str = f"  → {type(act).__name__}" if act is not None else ""
@@ -387,8 +390,7 @@ class OlsSMLayerRetrainer:
                     f"has out_features={layer.out_features}."
                 )
 
-            x_aug = self._augment(x_in, layer)
-            gram.accumulate(x_aug, y)
+            self._accumulate_gram(0, x_in, y)
 
         old_W = layer.weight.data.clone()
         self._solve_and_update(0)
@@ -445,12 +447,8 @@ class OlsSMLayerRetrainer:
             if x_in is None:
                 continue
 
-            x_aug = self._augment(x_in, layer)
             y = target_fn(batch_y).to(self.device, dtype=self.dtype)
-            if x_in.ndim == 3:
-                T = x_in.shape[1]
-                y = y.unsqueeze(1).expand(-1, T, -1).reshape(-1, y.shape[-1])
-            gram.accumulate(x_aug, y)
+            self._accumulate_gram(i, x_in, y)
 
         old_W = layer.weight.data.clone()
         self._solve_and_update(i)
@@ -492,19 +490,12 @@ class OlsSMLayerRetrainer:
             )
 
             # Accumulate Gram for each retrained layer
-            for i, layer in enumerate(self._retrained_layers):
+            for i in range(len(self._retrained_layers)):
                 x_in = self._act_cache.get(i)
                 if x_in is None:
                     continue
-                x_aug = self._augment(x_in, layer)          # (N, d_in+1)
                 t = targets_list[i].to(self.device, dtype=self.dtype)
-                # Tile targets if batch dims don't match — happens when x_in
-                # was 3D (B,T,d) and _backward_propagate_targets hasn't already
-                # tiled (e.g. last layer whose target comes straight from target_fn).
-                if t.shape[0] != x_aug.shape[0]:
-                    ratio = x_aug.shape[0] // t.shape[0]
-                    t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
-                self._grams[i].accumulate(x_aug, t)
+                self._accumulate_gram(i, x_in, t)
 
         # ── Solve and update each layer ───────────────────────────────────────
         deltas = []
@@ -573,11 +564,7 @@ class OlsSMLayerRetrainer:
                     weight_snapshot,
                 )
                 t = targets_list[i].to(self.device, dtype=self.dtype)
-                x_aug = self._augment(x_in, layer)
-                if t.shape[0] != x_aug.shape[0]:
-                    ratio = x_aug.shape[0] // t.shape[0]
-                    t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
-                self._grams[i].accumulate(x_aug, t)
+                self._accumulate_gram(i, x_in, t)
 
             # Solve and immediately apply — next layer sees the update.
             old_W = layer.weight.data.clone()
@@ -883,6 +870,50 @@ class OlsSMLayerRetrainer:
     # Helpers
     # -----------------------------------------------------------------------
 
+    def _accumulate_gram(
+        self,
+        i: int,
+        x_in: torch.Tensor,
+        t: torch.Tensor,
+    ) -> None:
+        """Accumulate one batch into layer i's Gram matrix.
+
+        Centralises three concerns so every call site is one line:
+
+        1. **Augmentation** — flattens 3-D activations (B, T, d) → (B*T, d)
+           and appends a bias column of ones if the layer has a bias.
+        2. **Target tiling** — if the target has fewer rows than x_aug (happens
+           when x_in was (B, T, d) and t comes from target_fn with shape (B,
+           d_out)), tiles t along the sequence dimension to match.
+        3. **Residual subtraction** (when ``self.residual_mode = True``) —
+           subtracts the layer's current linear output (W @ x + b) from the
+           target so OLS solves for the *correction* ΔW rather than the full
+           weight matrix W.  This keeps the solution close to the pretrained
+           initialisation and is critical when training data are limited.
+
+        Parameters
+        ----------
+        i     : index into ``self._retrained_layers``
+        x_in  : raw activation tensor as captured by the forward hook
+                (may be 2-D or 3-D, on self.device, self.dtype)
+        t     : target tensor in pre-activation space, shape (B, d_out) or
+                (B*T, d_out).  Must already be on self.device, self.dtype.
+        """
+        layer = self._retrained_layers[i]
+        x_aug = self._augment(x_in, layer)              # (N, d_in[+1])
+
+        # ── Tile t to match x_aug rows if needed ─────────────────────────────
+        if t.shape[0] != x_aug.shape[0]:
+            ratio = x_aug.shape[0] // t.shape[0]
+            t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
+
+        # ── Residual mode: OLS solves for ΔW, not W ──────────────────────────
+        if self.residual_mode:
+            x_flat = x_aug[:, :layer.in_features]       # strip bias column
+            t = t - self._compute_pre_activation(layer, x_flat)
+
+        self._grams[i].accumulate(x_aug, t)
+
     def _augment(self, x: torch.Tensor, layer: nn.Linear) -> torch.Tensor:
         """Flatten to 2D and optionally append a bias column of ones.
 
@@ -1000,13 +1031,21 @@ class OlsSMLayerRetrainer:
         W_aug = W_aug_T.T                           # (d_out, d_in_aug)
         W_aug_t = torch.from_numpy(W_aug.astype(np.float32)).to(self.device, dtype=self.dtype)
 
-        # Extract weight and optional bias
+        # Extract weight and optional bias, then apply.
+        # residual_mode=True : OLS solved for ΔW  → add correction to W_old
+        # residual_mode=False: OLS solved for W   → replace W entirely
         W_weight = W_aug_t[:, :d_in]              # (d_out, d_in)
-        layer.weight.data.copy_(W_weight)
+        if self.residual_mode:
+            layer.weight.data.add_(W_weight)
+        else:
+            layer.weight.data.copy_(W_weight)
 
         if layer.bias is not None and d_in_aug == d_in + 1:
             W_bias = W_aug_t[:, d_in]             # (d_out,)
-            layer.bias.data.copy_(W_bias)
+            if self.residual_mode:
+                layer.bias.data.add_(W_bias)
+            else:
+                layer.bias.data.copy_(W_bias)
 
     def _reset_grams(self) -> None:
         """Zero all Gram accumulators."""
@@ -1016,6 +1055,76 @@ class OlsSMLayerRetrainer:
     # -----------------------------------------------------------------------
     # Introspection helpers
     # -----------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------
+    # Target-function factories
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def make_logit_target_fn(
+        num_classes: int,
+        smoothing: float = 0.01,
+    ) -> Callable[[torch.Tensor], torch.Tensor]:
+        """Return a ``target_fn`` that maps integer labels to logit-space targets.
+
+        **Why this matters for OLS classifiers**
+
+        A plain one-hot target pushes the last layer's logits toward {0, 1}.
+        But softmax({0, ..., 1, ..., 0}) is nearly *uniform* — a one-hot logit
+        vector gives no classification margin.  Adam avoids this because
+        cross-entropy loss pushes the correct-class logit toward +∞ relative
+        to the rest.
+
+        This factory creates targets in log-probability space:
+
+        .. math::
+
+            t_{\\text{correct}} = \\log\\!\\left(1 - \\varepsilon \\cdot
+                \\frac{K-1}{K}\\right), \\quad
+            t_{\\text{wrong}} = \\log\\!\\left(\\frac{\\varepsilon}{K}\\right)
+
+        where ε = ``smoothing`` and K = ``num_classes``.  When OLS minimises
+        ‖W x − t‖², the solution pushes correct-class logits above wrong-class
+        logits by ~log(1/ε) ≈ 4–9 nats — the same margin cross-entropy
+        produces at convergence.
+
+        Parameters
+        ----------
+        num_classes : int
+            Number of output classes K.
+        smoothing : float
+            Label-smoothing ε.  Default 0.01.  Smaller → larger logit margin
+            → more confident predictions.  Typical range: 0.001–0.1.
+
+        Returns
+        -------
+        target_fn : callable (batch_y: LongTensor) → FloatTensor (B, K)
+
+        Example
+        -------
+        ::
+
+            target_fn = OlsSMLayerRetrainer.make_logit_target_fn(num_classes=10)
+            retrainer = OlsSMLayerRetrainer(model, n_layers=1)
+            retrainer.retrain(train_loader, target_fn=target_fn)
+        """
+        import math
+        K = num_classes
+        eps = smoothing
+        # Smooth probabilities: p_correct = 1 - ε(K-1)/K, p_wrong = ε/K
+        t_correct = math.log(1.0 - eps * (K - 1) / K + 1e-12)
+        t_wrong   = math.log(eps / K + 1e-12)
+
+        def _target_fn(y: torch.Tensor) -> torch.Tensor:
+            # y: (B,) integer class indices → (B, K) logit targets
+            out = torch.full(
+                (y.shape[0], K), t_wrong,
+                dtype=torch.float32, device=y.device,
+            )
+            out.scatter_(1, y.view(-1, 1).long(), t_correct)
+            return out
+
+        return _target_fn
 
     def get_retrained_layers(self) -> List[nn.Linear]:
         """Return the list of layers being retrained."""
@@ -1031,6 +1140,9 @@ class OlsSMLayerRetrainer:
             f"OlsSMLayerRetrainer",
             f"  n_layers    : {self.n_layers}",
             f"  bcd_mode    : {self.bcd_mode}",
+            f"  residual_mode: {self.residual_mode}  "
+            + ("(solves for ΔW, fine-tunes around init)" if self.residual_mode
+               else "(solves for W from scratch)"),
             f"  lambda_reg  : {self.lambda_reg}",
             f"  max_sweeps  : {self.max_sweeps}  (tol={self.tol})",
             f"  lora_rank   : {self.lora_rank}"
