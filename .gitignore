@@ -10,4 +10,4 @@ __pycache__/
 .pytest_cache/
 ./.venv/
 /benchmark_10Apr/
-benchmark/results/
+benchmark/results/*.pt

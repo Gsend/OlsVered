@@ -1,0 +1,2 @@
+task,name,batch_size,lr_init,lr_final,steps,samples,wall_s,avg_fwdbwd_ms,avg_opt_ms,p99_opt_ms,peak_mem_gb,avg_power_w,final_val_acc,final_val_loss
+bert,ClassicKFAC,512,0.005,1e-05,8000,4081900,3324.1,221.18,112.45,594.79,25.671,447.6067575,0.8589449541284404,0.4188002869486809
