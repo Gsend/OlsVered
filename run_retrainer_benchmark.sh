@@ -64,7 +64,7 @@ LAMBDA_REG="1e-4"
 TAG=""
 NO_PLOTS=false
 RUN_SETUP=true
-USE_TMUX=true
+USE_TMUX=false
 SESSION="retrainer_bench"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
