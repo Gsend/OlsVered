@@ -1100,13 +1100,26 @@ class OlsSMLayerRetrainer:
         -------
         target_fn : callable (batch_y: LongTensor) → FloatTensor (B, K)
 
+        .. warning::
+            **Only use when the model's logits are near zero** (e.g. random
+            initialisation or immediately after adding a new classification
+            head).  For a fine-tuned pretrained model whose logits are already
+            large (e.g. ±5–10), these small absolute targets will instruct OLS
+            to *reduce* confident correct-class logits, hurting accuracy.
+            In that case use plain one-hot targets — ``residual_mode=True``
+            will still improve over full-replace OLS without this problem.
+
         Example
         -------
         ::
 
+            # Good: fresh classification head, logits start near 0
             target_fn = OlsSMLayerRetrainer.make_logit_target_fn(num_classes=10)
             retrainer = OlsSMLayerRetrainer(model, n_layers=1)
             retrainer.retrain(train_loader, target_fn=target_fn)
+
+            # Bad: fine-tuned BERT — use one-hot instead
+            # target_fn = lambda y: F.one_hot(y, num_classes).float()
         """
         import math
         K = num_classes

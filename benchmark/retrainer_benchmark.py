@@ -495,14 +495,13 @@ def run_ols(
     for p in model.parameters():
         p.requires_grad = False
 
-    # target_fn: logit-space targets for the classifier head.
-    #
-    # One-hot {0,1} targets are wrong for a softmax last layer: OLS would push
-    # logits toward {0,1}, but softmax([0,...,1,...,0]) is nearly uniform.
-    # Logit targets push logits to log-probability space — the same margin that
-    # cross-entropy produces at convergence — so OLS and Adam converge to the
-    # same solution.
-    target_fn = OlsSMLayerRetrainer.make_logit_target_fn(num_classes=num_labels)
+    # target_fn: one-hot targets for the classifier head.
+    # With residual_mode=True, OLS solves for ΔW such that (W_old+ΔW)@x → y_onehot.
+    # For a pretrained model with large logits (e.g. [-5, 8]), the residual
+    # (y_onehot - W_old@x) points in the right direction and the solution
+    # fine-tunes around the good initialisation rather than replacing weights.
+    def target_fn(y: torch.Tensor) -> torch.Tensor:
+        return F.one_hot(y.long(), num_classes=num_labels).float()
 
     # Resolve n_layers=-1 to all linear layers
     n_linear = sum(1 for m in model.modules() if isinstance(m, nn.Linear))
