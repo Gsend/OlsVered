@@ -904,8 +904,16 @@ class OlsSMLayerRetrainer:
 
         # ── Tile t to match x_aug rows if needed ─────────────────────────────
         if t.shape[0] != x_aug.shape[0]:
-            ratio = x_aug.shape[0] // t.shape[0]
-            t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
+            if x_aug.shape[0] < t.shape[0]:
+                # t has MORE rows than x_aug — target was already tiled by
+                # _backward_propagate_targets (consecutive 3-D layers); just
+                # slice the leading rows to match.  This should not happen
+                # after the mismatch-based fix in _backward_propagate_targets,
+                # but guard against it defensively.
+                t = t[:x_aug.shape[0]]
+            else:
+                ratio = x_aug.shape[0] // t.shape[0]
+                t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
 
         # ── Residual mode: OLS solves for ΔW, not W ──────────────────────────
         if self.residual_mode:
@@ -964,10 +972,15 @@ class OlsSMLayerRetrainer:
             x_cached = self._act_cache.get(i)
             if x_cached is not None:
                 x_flat = x_cached.reshape(-1, x_cached.shape[-1])
-                # Tile t to match x_flat if activation was sequence-wise
-                if x_cached.ndim == 3:
-                    T = x_cached.shape[1]
-                    t = t.unsqueeze(1).expand(-1, T, -1).reshape(-1, t.shape[-1])
+                # Tile t to match x_flat only if not already tiled.
+                # Use mismatch-based check (not ndim==3) so that t is never
+                # tiled twice when consecutive retrained layers both have 3-D
+                # activations — which would cause t to grow by T^2 rows and
+                # subsequently collapse to 0 rows via integer division in
+                # _accumulate_gram.
+                if t.shape[0] != x_flat.shape[0] and x_flat.shape[0] > t.shape[0]:
+                    ratio = x_flat.shape[0] // t.shape[0]
+                    t = t.unsqueeze(1).expand(-1, ratio, -1).reshape(-1, t.shape[-1])
                 t = self._inverse_activation(t, i, x_flat)
 
             targets_list[i] = t
