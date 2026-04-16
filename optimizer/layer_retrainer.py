@@ -301,6 +301,14 @@ class OlsSMLayerRetrainer:
         if target_fn is None:
             target_fn = lambda y: y.float()  # noqa: E731
 
+        # ── Ensure eval mode during all accumulation passes ───────────────────
+        # Dropout (and other train-only layers) produce noisy activations that
+        # make OLS accumulate the wrong Gram matrices.  We put the model in eval
+        # mode for the entire retrain() call and restore the original state when
+        # we're done — whether we return normally or via an exception.
+        was_training = self.model.training
+        self.model.eval()
+
         history: Dict[str, Any] = {
             "converged": False,
             "n_sweeps": 0,
@@ -308,50 +316,56 @@ class OlsSMLayerRetrainer:
             "lora_fitted": False,
         }
 
-        # Special path: N=1 is provably optimal in one pass
-        if self.n_layers == 1:
-            return self._single_layer_retrain(dataloader, target_fn)
+        try:
+          # Special path: N=1 is provably optimal in one pass
+          if self.n_layers == 1:
+              return self._single_layer_retrain(dataloader, target_fn)
 
-        # ── BCD loop ─────────────────────────────────────────────────────────
-        _sweep_fn = (self._bcd_sweep_gauss_seidel
-                     if self.bcd_mode == "gauss_seidel"
-                     else self._bcd_sweep)
+          # ── BCD loop ───────────────────────────────────────────────────────
+          _sweep_fn = (self._bcd_sweep_gauss_seidel
+                       if self.bcd_mode == "gauss_seidel"
+                       else self._bcd_sweep)
 
-        for sweep in range(self.max_sweeps):
-            deltas = _sweep_fn(dataloader, target_fn)
-            history["deltas"].append(deltas)
-            history["n_sweeps"] += 1
+          for sweep in range(self.max_sweeps):
+              deltas = _sweep_fn(dataloader, target_fn)
+              history["deltas"].append(deltas)
+              history["n_sweeps"] += 1
 
-            max_delta = max(deltas)
-            if self.verbose:
-                delta_str = "  ".join(f"L{i}:{d:.2e}" for i, d in enumerate(deltas))
-                print(f"[BCD sweep {sweep + 1}/{self.max_sweeps}]  "
-                      f"max|ΔW| = {max_delta:.2e}  ({delta_str})")
+              max_delta = max(deltas)
+              if self.verbose:
+                  delta_str = "  ".join(f"L{i}:{d:.2e}" for i, d in enumerate(deltas))
+                  print(f"[BCD sweep {sweep + 1}/{self.max_sweeps}]  "
+                        f"max|ΔW| = {max_delta:.2e}  ({delta_str})")
 
-            if max_delta < self.tol:
-                history["converged"] = True
-                if self.verbose:
-                    print(f"  → Converged (tol={self.tol:.1e})")
-                break
+              if max_delta < self.tol:
+                  history["converged"] = True
+                  if self.verbose:
+                      print(f"  → Converged (tol={self.tol:.1e})")
+                  break
 
-        # ── Final output-layer solve (Jacobi only) ────────────────────────────
-        # Jacobi BCD updates all layers simultaneously; the output layer may
-        # not be optimally fitted to the representations the other layers
-        # settled on.  One clean single-layer OLS pass with ground-truth
-        # targets anchors the classifier and prevents oscillation.
-        # Gauss-Seidel already ends with the last layer solved last, so this
-        # step is redundant there and is skipped.
-        if self.bcd_mode == "jacobi":
-            self._final_output_layer_solve(dataloader, target_fn)
+          # ── Final output-layer solve (Jacobi only) ──────────────────────────
+          # Jacobi BCD updates all layers simultaneously; the output layer may
+          # not be optimally fitted to the representations the other layers
+          # settled on.  One clean single-layer OLS pass with ground-truth
+          # targets anchors the classifier and prevents oscillation.
+          # Gauss-Seidel already ends with the last layer solved last, so this
+          # step is redundant there and is skipped.
+          if self.bcd_mode == "jacobi":
+              self._final_output_layer_solve(dataloader, target_fn)
 
-        # ── OLS + LoRA residual stage ─────────────────────────────────────────
-        if self.lora_rank > 0:
-            if self.verbose:
-                print(f"\n[OLS+LoRA] Fitting rank-{self.lora_rank} residual adapters …")
-            self._fit_lora_residual(dataloader, target_fn)
-            history["lora_fitted"] = True
+          # ── OLS + LoRA residual stage ─────────────────────────────────────
+          if self.lora_rank > 0:
+              if self.verbose:
+                  print(f"\n[OLS+LoRA] Fitting rank-{self.lora_rank} residual adapters …")
+              self._fit_lora_residual(dataloader, target_fn)
+              history["lora_fitted"] = True
 
-        return history
+          return history
+
+        finally:
+            # Restore training mode regardless of how we exit
+            if was_training:
+                self.model.train()
 
     # -----------------------------------------------------------------------
     # BCD internals
