@@ -510,10 +510,15 @@ def run_lora_als(
     # (full-replace BCD; residual_mode=True with BCD causes exponential blowup).
     residual_mode = (n_layers == 1)
 
+    # Same lambda scaling as run_ols — see comment there for rationale.
+    lambda_eff = lambda_reg * (10.0 ** max(0, n_layers - 1))
+    if n_layers > 1:
+        print(f"  [lambda scaling]  N={n_layers}  λ={lambda_reg:.0e} → {lambda_eff:.0e}")
+
     retrainer = OlsSMLayerRetrainer(
         model,
         n_layers=n_layers,
-        lambda_reg=lambda_reg,
+        lambda_reg=lambda_eff,
         lora_rank=rank,
         lora_sweeps=als_sweeps,
         lora_lambda=lambda_reg,
@@ -613,10 +618,23 @@ def run_ols(
     #   which guarantees monotone convergence for Gauss-Seidel.
     residual_mode = (actual_n == 1)
 
+    # Scale lambda_reg with n_layers for BCD stability.
+    # With N>1 the Gauss-Seidel BCD couples layers: an over-large solution in
+    # the output layer projects extreme backward targets to earlier layers, which
+    # in turn produce a corrective update that again over-shoots.  Increasing λ
+    # dampens each layer's OLS solution, keeping the coupled system bounded.
+    # Factor of 10 per additional layer is empirically stable on BERT+SST-2:
+    #   N=1 → λ=1e-4  (unchanged, proven stable)
+    #   N=2 → λ=1e-3
+    #   N=4 → λ=1e-1
+    lambda_eff = lambda_reg * (10.0 ** max(0, actual_n - 1))
+    if actual_n > 1:
+        print(f"  [lambda scaling]  N={actual_n}  λ={lambda_reg:.0e} → {lambda_eff:.0e}")
+
     retrainer = OlsSMLayerRetrainer(
         model,
         n_layers=actual_n,
-        lambda_reg=lambda_reg,
+        lambda_reg=lambda_eff,
         max_sweeps=max_sweeps,
         tol=1e-5,
         lora_rank=lora_rank,

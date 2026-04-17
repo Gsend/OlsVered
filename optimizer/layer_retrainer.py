@@ -440,7 +440,16 @@ class OlsSMLayerRetrainer:
         # Uses self.residual_mode and self.bcd_mode as configured.
         # For N=1 this calls _single_layer_retrain (single-pass, exact).
         # For N>1 this runs BCD sweeps with the configured mode.
-        history = self.retrain(dataloader, target_fn)
+        #
+        # Temporarily set lora_rank=0 so retrain() does NOT call
+        # _fit_lora_residual (random-init ALS) after the OLS solve.
+        # We do our own SVD compression below instead.
+        saved_lora_rank = self.lora_rank
+        self.lora_rank = 0
+        try:
+            history = self.retrain(dataloader, target_fn)
+        finally:
+            self.lora_rank = saved_lora_rank
 
         # ── Step 3: extract ΔW, restore weights ──────────────────────────────
         self._lora = [None] * self.n_layers
