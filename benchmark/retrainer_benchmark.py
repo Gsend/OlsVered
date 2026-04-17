@@ -105,21 +105,27 @@ ALL_MODES = [
     "ols_lora_r2",
     "ols_lora_r4",
     "ols_lora_r8",
+    "als_lora_n1_r4",
+    "als_lora_n2_r4",
+    "als_lora_n4_r4",
 ]
 
 MODE_LABELS = {
-    "adam":        "AdamW (full)",
-    "adam_head":   "AdamW (head only)",
-    "lora_r4":     "LoRA r=4",
-    "lora_r8":     "LoRA r=8",
-    "ols_n1":      "OLS  N=1",
-    "ols_n2":      "OLS  N=2 (BCD)",
-    "ols_n4":      "OLS  N=4 (BCD)",
-    "ols_n8":      "OLS  N=8 (BCD)",
-    "ols_all":     "OLS  all layers",
-    "ols_lora_r2": "OLS N=2 + LoRA r=2",
-    "ols_lora_r4": "OLS N=2 + LoRA r=4",
-    "ols_lora_r8": "OLS N=2 + LoRA r=8",
+    "adam":           "AdamW (full)",
+    "adam_head":      "AdamW (head only)",
+    "lora_r4":        "LoRA r=4",
+    "lora_r8":        "LoRA r=8",
+    "ols_n1":         "OLS  N=1",
+    "ols_n2":         "OLS  N=2 (BCD)",
+    "ols_n4":         "OLS  N=4 (BCD)",
+    "ols_n8":         "OLS  N=8 (BCD)",
+    "ols_all":        "OLS  all layers",
+    "ols_lora_r2":    "OLS N=2 + LoRA r=2",
+    "ols_lora_r4":    "OLS N=2 + LoRA r=4",
+    "ols_lora_r8":    "OLS N=2 + LoRA r=8",
+    "als_lora_n1_r4": "ALS-LoRA N=1 r=4",
+    "als_lora_n2_r4": "ALS-LoRA N=2 r=4",
+    "als_lora_n4_r4": "ALS-LoRA N=4 r=4",
 }
 
 # ---------------------------------------------------------------------------
@@ -467,6 +473,93 @@ def run_lora(
     )
 
 
+def run_lora_als(
+    model_init: nn.Module,
+    train_loader,
+    eval_loader,
+    device: torch.device,
+    n_layers: int,
+    rank: int = 4,
+    als_sweeps: int = 5,
+    lambda_reg: float = 1e-4,
+    num_labels: int = 2,
+) -> ModeResult:
+    """ALS-LoRA: train LoRA matrices via Alternating Least Squares, no gradients.
+
+    Replaces AdamW for the LoRA sub-problem with exact OLS alternating between
+    fixing B (solve A) and fixing A (solve B).  Base weights W are never modified.
+
+    Each ALS sweep is one dataset pass — 5 sweeps ≈ 5× the cost of OLS N=1,
+    far fewer than the hundreds of gradient steps AdamW needs.
+
+    This answers: "can OLS replace Adam in LoRA matrices?"
+    """
+    mode = f"als_lora_n{n_layers}_r{rank}"
+    print(f"\n{'─'*60}\n[{MODE_LABELS.get(mode, mode)}]")
+
+    model = copy.deepcopy(model_init).to(device)
+    for p in model.parameters():
+        p.requires_grad = False
+
+    def target_fn(y: torch.Tensor) -> torch.Tensor:
+        return F.one_hot(y.long(), num_classes=num_labels).float()
+
+    n_linear = sum(1 for m in model.modules() if isinstance(m, nn.Linear))
+
+    retrainer = OlsSMLayerRetrainer(
+        model,
+        n_layers=n_layers,
+        lambda_reg=lambda_reg,
+        lora_rank=rank,
+        lora_sweeps=als_sweeps,
+        lora_lambda=lambda_reg,
+        bcd_mode="gauss_seidel",
+        residual_mode=True,   # irrelevant (W not touched), but consistent
+        verbose=True,
+    )
+    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_total = sum(p.numel() for p in model.parameters())
+    # LoRA params are not nn.Parameters here (they're plain tensors inside the
+    # retrainer), so count them manually: 2 × rank × (d_in + d_out) per layer
+    lora_params = sum(
+        rank * (layer.in_features + layer.out_features)
+        for layer in retrainer.get_retrained_layers()
+    )
+    print(f"  ALS-LoRA on last {n_layers} of {n_linear} Linear layers  "
+          f"(rank={rank}, {lora_params:,} adapter params, {als_sweeps} ALS sweeps)")
+
+    class HFLoaderAdapter:
+        def __init__(self, loader):
+            self._loader = loader
+        def __iter__(self):
+            for batch in self._loader:
+                x = {k: batch[k] for k in ("input_ids", "attention_mask")}
+                y = batch["labels"]
+                yield x, y
+        def __len__(self):
+            return len(self._loader)
+
+    _reset_peak(device)
+    t0 = time.time()
+
+    retrainer.retrain_lora_als(HFLoaderAdapter(train_loader), target_fn)
+    retrainer.remove_hooks()
+
+    wall = time.time() - t0
+    acc, loss_val = evaluate(model, eval_loader, device)
+    mem = _peak_mem(device)
+
+    print(f"  → accuracy={acc:.4f}  loss={loss_val:.4f}  "
+          f"time={wall:.0f}s  mem={mem:.2f}GB  als_sweeps={als_sweeps}")
+    return ModeResult(
+        mode=mode, label=MODE_LABELS.get(mode, mode),
+        accuracy=acc, loss=loss_val, wall_s=wall, peak_mem_gb=mem,
+        n_trainable=lora_params, n_total=n_total,
+        n_data_passes=als_sweeps,
+        extra={"n_layers_als": n_layers, "lora_rank": rank, "als_sweeps": als_sweeps},
+    )
+
+
 def run_ols(
     model_init: nn.Module,
     train_loader,
@@ -506,6 +599,13 @@ def run_ols(
     n_linear = sum(1 for m in model.modules() if isinstance(m, nn.Linear))
     actual_n = n_linear if n_layers == -1 else n_layers
 
+    # bcd_step_size < 1.0 damps each BCD update to prevent oscillation.
+    # For N=1 this has no effect (single exact solve, step_size is ignored).
+    # For N>1 the first sweep often overshoots (max|ΔW|~700) because λ is tiny
+    # relative to the Gram magnitude; α=0.5 halves the correction each sweep,
+    # allowing the coupled layer system to converge smoothly.
+    bcd_step_size = 1.0 if actual_n == 1 else 0.5
+
     retrainer = OlsSMLayerRetrainer(
         model,
         n_layers=actual_n,
@@ -516,6 +616,7 @@ def run_ols(
         lora_sweeps=3,
         bcd_mode=bcd_mode,
         residual_mode=True,
+        bcd_step_size=bcd_step_size,
         verbose=True,
     )
     n_train, n_total = count_trainable(model)
@@ -863,6 +964,18 @@ def main():
                             n_layers=2, lora_rank=8, max_sweeps=args.max_sweeps,
                             lambda_reg=args.lambda_reg, num_labels=num_labels,
                             bcd_mode=args.bcd_mode)
+            elif mode == "als_lora_n1_r4":
+                r = run_lora_als(model_init, train_loader, eval_loader, device,
+                                 n_layers=1, rank=4, als_sweeps=args.max_sweeps,
+                                 lambda_reg=args.lambda_reg, num_labels=num_labels)
+            elif mode == "als_lora_n2_r4":
+                r = run_lora_als(model_init, train_loader, eval_loader, device,
+                                 n_layers=2, rank=4, als_sweeps=args.max_sweeps,
+                                 lambda_reg=args.lambda_reg, num_labels=num_labels)
+            elif mode == "als_lora_n4_r4":
+                r = run_lora_als(model_init, train_loader, eval_loader, device,
+                                 n_layers=4, rank=4, als_sweeps=args.max_sweeps,
+                                 lambda_reg=args.lambda_reg, num_labels=num_labels)
             else:
                 raise ValueError(f"Unknown mode: {mode}")
 

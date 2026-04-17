@@ -173,11 +173,16 @@ class OlsSMLayerRetrainer:
         dtype: torch.dtype = torch.float32,
         bcd_mode: str = "jacobi",
         residual_mode: bool = True,
+        bcd_step_size: float = 1.0,
         verbose: bool = True,
     ):
         if bcd_mode not in ("jacobi", "gauss_seidel"):
             raise ValueError(
                 f"bcd_mode must be 'jacobi' or 'gauss_seidel', got {bcd_mode!r}"
+            )
+        if not (0.0 < bcd_step_size <= 1.0):
+            raise ValueError(
+                f"bcd_step_size must be in (0, 1], got {bcd_step_size}"
             )
         self.model = model
         self.lambda_reg = lambda_reg
@@ -188,6 +193,7 @@ class OlsSMLayerRetrainer:
         self.lora_sweeps = lora_sweeps
         self.bcd_mode = bcd_mode
         self.residual_mode = residual_mode
+        self.bcd_step_size = bcd_step_size
         self.verbose = verbose
         self.device = device or next(model.parameters()).device
         self.dtype = dtype
@@ -219,6 +225,8 @@ class OlsSMLayerRetrainer:
 
         if self.verbose:
             mode_str = f"bcd={bcd_mode}" + (" residual" if residual_mode else " full-replace")
+            if bcd_step_size < 1.0:
+                mode_str += f" α={bcd_step_size}"
             print(f"[OlsSMLayerRetrainer] Retraining {n_layers} layer(s)  [{mode_str}]:")
             for i, layer in enumerate(self._retrained_layers):
                 act = self._layer_activations.get(i)
@@ -366,6 +374,63 @@ class OlsSMLayerRetrainer:
             # Restore training mode regardless of how we exit
             if was_training:
                 self.model.train()
+
+    def retrain_lora_als(
+        self,
+        dataloader: Iterable[Tuple[torch.Tensor, torch.Tensor]],
+        target_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> Dict[str, Any]:
+        """Train ONLY the LoRA adapter via ALS — no OLS weight modification.
+
+        This is a drop-in replacement for gradient-based LoRA (AdamW on A and B)
+        that uses exact Alternating Least Squares instead.  The base weights W
+        are never touched; only the rank-r factors A and B are updated.
+
+        Each ALS sweep (``lora_sweeps`` total):
+
+        1. One forward pass over the full dataset to accumulate:
+           - ``ZᵀZ`` and ``ZᵀΔY`` for the B solve   (Z = X Aᵀ)
+           - ``XᵀX`` and ``Xᵀ(ΔY B)`` for the A solve
+        2. Exact OLS solve for B (fixing A), then for A (fixing new B).
+        3. After all sweeps, B @ A is merged into the weight matrix.
+
+        Unlike gradient-based LoRA this requires no learning rate, no momentum
+        buffers, and converges in 3–5 sweeps rather than thousands of steps.
+
+        Parameters
+        ----------
+        dataloader : iterable of (batch_x, batch_y)
+        target_fn  : same semantics as ``retrain()``.  Defaults to identity.
+
+        Returns
+        -------
+        dict with keys ``lora_fitted`` (True), ``n_als_sweeps`` (int).
+
+        Raises
+        ------
+        ValueError
+            If ``lora_rank == 0`` — no adapter to fit.
+        """
+        if self.lora_rank == 0:
+            raise ValueError(
+                "retrain_lora_als() requires lora_rank > 0. "
+                "Pass lora_rank=r when constructing OlsSMLayerRetrainer."
+            )
+        if target_fn is None:
+            target_fn = lambda y: y.float()  # noqa: E731
+
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            if self.verbose:
+                print(f"[OlsSMLayerRetrainer] ALS-LoRA  rank={self.lora_rank}  "
+                      f"sweeps={self.lora_sweeps}  (W frozen, no OLS pre-step)")
+            self._fit_lora_residual(dataloader, target_fn)
+        finally:
+            if was_training:
+                self.model.train()
+
+        return {"lora_fitted": True, "n_als_sweeps": self.lora_sweeps}
 
     # -----------------------------------------------------------------------
     # BCD internals
@@ -523,7 +588,7 @@ class OlsSMLayerRetrainer:
                 deltas.append(0.0)
                 continue
             old_W = layer.weight.data.clone()
-            self._solve_and_update(i)
+            self._solve_and_update(i, step_size=self.bcd_step_size)
             delta = (layer.weight.data - old_W).abs().max().item()
             deltas.append(delta)
 
@@ -581,8 +646,9 @@ class OlsSMLayerRetrainer:
                 self._accumulate_gram(i, x_in, t)
 
             # Solve and immediately apply — next layer sees the update.
+            # Solve and immediately apply — next layer sees the update.
             old_W = layer.weight.data.clone()
-            self._solve_and_update(i)
+            self._solve_and_update(i, step_size=self.bcd_step_size)
             delta = (layer.weight.data - old_W).abs().max().item()
             deltas.append(delta)
 
@@ -1032,7 +1098,7 @@ class OlsSMLayerRetrainer:
         Y_in = W_f.T @ X                      # (d_in, B)
         return Y_in.T.to(dtype=self.dtype)    # (B, d_in)
 
-    def _solve_and_update(self, layer_idx: int) -> None:
+    def _solve_and_update(self, layer_idx: int, step_size: float = 1.0) -> None:
         """Solve OLS for layer `layer_idx` and update its weights in-place.
 
         Solves:  (XᵀX + λI) Wᵀ = XᵀY
@@ -1061,18 +1127,26 @@ class OlsSMLayerRetrainer:
         # Extract weight and optional bias, then apply.
         # residual_mode=True : OLS solved for ΔW  → add correction to W_old
         # residual_mode=False: OLS solved for W   → replace W entirely
+        # step_size < 1.0    : dampen the update to prevent BCD oscillation
         W_weight = W_aug_t[:, :d_in]              # (d_out, d_in)
         if self.residual_mode:
-            layer.weight.data.add_(W_weight)
+            layer.weight.data.add_(W_weight * step_size)
         else:
-            layer.weight.data.copy_(W_weight)
+            if step_size < 1.0:
+                # Interpolate: W_new = (1-α)*W_old + α*W_solve
+                layer.weight.data.lerp_(W_weight, step_size)
+            else:
+                layer.weight.data.copy_(W_weight)
 
         if layer.bias is not None and d_in_aug == d_in + 1:
             W_bias = W_aug_t[:, d_in]             # (d_out,)
             if self.residual_mode:
-                layer.bias.data.add_(W_bias)
+                layer.bias.data.add_(W_bias * step_size)
             else:
-                layer.bias.data.copy_(W_bias)
+                if step_size < 1.0:
+                    layer.bias.data.lerp_(W_bias, step_size)
+                else:
+                    layer.bias.data.copy_(W_bias)
 
     def _reset_grams(self) -> None:
         """Zero all Gram accumulators."""
