@@ -506,6 +506,10 @@ def run_lora_als(
 
     n_linear = sum(1 for m in model.modules() if isinstance(m, nn.Linear))
 
+    # residual_mode mirrors run_ols: True for N=1 (proven stable), False for N>1
+    # (full-replace BCD; residual_mode=True with BCD causes exponential blowup).
+    residual_mode = (n_layers == 1)
+
     retrainer = OlsSMLayerRetrainer(
         model,
         n_layers=n_layers,
@@ -514,7 +518,8 @@ def run_lora_als(
         lora_sweeps=als_sweeps,
         lora_lambda=lambda_reg,
         bcd_mode="gauss_seidel",
-        residual_mode=True,   # irrelevant (W not touched), but consistent
+        residual_mode=residual_mode,
+        bcd_step_size=1.0,
         verbose=True,
     )
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)

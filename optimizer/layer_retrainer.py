@@ -107,7 +107,7 @@ class LoraAdapter:
 # ---------------------------------------------------------------------------
 
 class OlsSMLayerRetrainer:
-    """Retrain the last N nn.Linear layers of a model using exact OLS.
+    """Retrain the last N nn.Linear layers of a W += B@A using exact OLS.
 
     Parameters
     ----------
@@ -380,22 +380,27 @@ class OlsSMLayerRetrainer:
         dataloader: Iterable[Tuple[torch.Tensor, torch.Tensor]],
         target_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     ) -> Dict[str, Any]:
-        """Train ONLY the LoRA adapter via ALS — no OLS weight modification.
+        """OLS/BCD solution compressed to rank-r via truncated SVD.
 
-        This is a drop-in replacement for gradient-based LoRA (AdamW on A and B)
-        that uses exact Alternating Least Squares instead.  The base weights W
-        are never touched; only the rank-r factors A and B are updated.
+        Runs the standard ``retrain()`` BCD loop to obtain the full-rank optimal
+        ΔW per layer, then post-hoc compresses each layer's update to rank-r via
+        truncated SVD before applying it.
 
-        Each ALS sweep (``lora_sweeps`` total):
+        Algorithm
+        ---------
+        1. **OLS/BCD phase** — identical to ``retrain()``; uses the existing
+           proven accumulation code, eval-mode guard, and convergence logic.
+        2. **Extract ΔW** — record ``W_after − W_before`` for every retrained
+           layer (and Δb for biases).
+        3. **Restore** — put weights back to ``W_before`` / ``b_before``.
+        4. **SVD compress** — for each layer solve
+               dW = U Σ Vᵀ  →  B = U[:,:r]√Σ[:r],  A = √Σ[:r] Vᵀ[:r,:]
+        5. **Apply** — ``W += B @ A`` (low-rank part) + ``b += Δb`` (full bias,
+           no compression needed for a 1-D vector).
 
-        1. One forward pass over the full dataset to accumulate:
-           - ``ZᵀZ`` and ``ZᵀΔY`` for the B solve   (Z = X Aᵀ)
-           - ``XᵀX`` and ``Xᵀ(ΔY B)`` for the A solve
-        2. Exact OLS solve for B (fixing A), then for A (fixing new B).
-        3. After all sweeps, B @ A is merged into the weight matrix.
-
-        Unlike gradient-based LoRA this requires no learning rate, no momentum
-        buffers, and converges in 3–5 sweeps rather than thousands of steps.
+        For the output layer (rank ≤ d_out), rank-r ≥ d_out captures the full
+        OLS update exactly (e.g. BERT head is 768→2, rank ≤ 2, so rank-4 SVD
+        gives 100% capture and the result is identical to plain ``ols_n1``).
 
         Parameters
         ----------
@@ -404,12 +409,12 @@ class OlsSMLayerRetrainer:
 
         Returns
         -------
-        dict with keys ``lora_fitted`` (True), ``n_als_sweeps`` (int).
+        dict — same keys as ``retrain()`` plus ``n_als_sweeps`` (always 0).
 
         Raises
         ------
         ValueError
-            If ``lora_rank == 0`` — no adapter to fit.
+            If ``lora_rank == 0``.
         """
         if self.lora_rank == 0:
             raise ValueError(
@@ -419,102 +424,87 @@ class OlsSMLayerRetrainer:
         if target_fn is None:
             target_fn = lambda y: y.float()  # noqa: E731
 
-        was_training = self.model.training
-        self.model.eval()
-        try:
-            if self.verbose:
-                print(f"[OlsSMLayerRetrainer] ALS-LoRA  rank={self.lora_rank}  "
-                      f"sweeps={self.lora_sweeps}  (W frozen, SVD-warm-start)")
+        r = self.lora_rank
+        if self.verbose:
+            print(f"[OlsSMLayerRetrainer] SVD-LoRA  rank={r}  "
+                  f"(OLS/BCD → SVD compress → apply)")
 
-            # ── Pass 1: accumulate Gram matrices for OLS ──────────────────────
-            # ALS with random init diverges: uncorrelated A/B amplify noise
-            # each iteration.  Instead we do one OLS pass to get the full-rank
-            # optimal ΔW per layer, then decompose via truncated SVD to get
-            # rank-r factors (A, B) that capture the most important directions.
-            # For the output layer (rank ≤ d_out), rank-r ≥ d_out captures ΔW
-            # exactly.  ALS then refines the low-rank approximation further.
-            self._reset_grams()
-            weight_snapshot = [l.weight.data.clone() for l in self._retrained_layers]
+        # ── Step 1: snapshot weights ──────────────────────────────────────────
+        W_before = [l.weight.data.clone() for l in self._retrained_layers]
+        b_before = [
+            l.bias.data.clone() if l.bias is not None else None
+            for l in self._retrained_layers
+        ]
 
-            for batch_x, batch_y in dataloader:
-                batch_x = _to_device(batch_x, self.device)
-                batch_y = batch_y.to(self.device)
-                self._act_cache.clear()
-                with torch.no_grad():
-                    _model_forward(self.model, batch_x)
-                targets_list = self._backward_propagate_targets(
-                    target_fn(batch_y).to(self.device, dtype=self.dtype),
-                    weight_snapshot,
-                )
-                for i in range(len(self._retrained_layers)):
-                    x_in = self._act_cache.get(i)
-                    if x_in is None:
-                        continue
-                    t = targets_list[i].to(self.device, dtype=self.dtype)
-                    self._accumulate_gram(i, x_in, t)
+        # ── Step 2: run standard OLS/BCD — proven accumulation code ──────────
+        # Uses self.residual_mode and self.bcd_mode as configured.
+        # For N=1 this calls _single_layer_retrain (single-pass, exact).
+        # For N>1 this runs BCD sweeps with the configured mode.
+        history = self.retrain(dataloader, target_fn)
 
-            # ── Initialise LoRA from SVD of OLS solution ──────────────────────
-            r = self.lora_rank
-            self._lora = [None] * self.n_layers
-            for i, layer in enumerate(self._retrained_layers):
-                gram = self._grams[i]
-                d_in_aug = gram.XtX.shape[0]
-                d_in = layer.in_features
+        # ── Step 3: extract ΔW, restore weights ──────────────────────────────
+        self._lora = [None] * self.n_layers
+        for i, layer in enumerate(self._retrained_layers):
+            W_after = layer.weight.data.clone()
+            b_after = layer.bias.data.clone() if layer.bias is not None else None
 
-                XtX_np = gram.XtX.cpu().numpy().astype(np.float64)
-                XtY_np = gram.XtY.cpu().numpy().astype(np.float64)
-                XtX_np += self.lambda_reg * np.eye(d_in_aug)
+            dW_np = (W_after - W_before[i]).cpu().numpy().astype(np.float64)  # (d_out, d_in)
 
-                # Solve full-rank OLS for ΔW (residual mode, same as N=1 path)
-                W_aug_T = lu_solve_gram(XtX_np, XtY_np)   # (d_in_aug, d_out)
-                dW = W_aug_T[:d_in, :].T                   # (d_out, d_in)
+            # Restore to pretrained weights before applying the low-rank version
+            layer.weight.data.copy_(W_before[i])
+            if layer.bias is not None and b_before[i] is not None:
+                layer.bias.data.copy_(b_before[i])
 
-                # Truncated SVD → best rank-r approximation to ΔW
-                # dW = U Σ Vᵀ  →  B = U[:,:r] sqrt(Σ[:r]),  A = sqrt(Σ[:r]) Vᵀ[:r,:]
-                try:
-                    U, S, Vt = np.linalg.svd(dW, full_matrices=False)
-                except np.linalg.LinAlgError:
-                    # Fallback: small random init
-                    U  = np.random.randn(layer.out_features, r).astype(np.float32) * 0.02
-                    S  = np.ones(r, dtype=np.float32) * 0.02
-                    Vt = np.random.randn(r, d_in).astype(np.float32) * 0.02
-
-                r_eff = min(r, len(S))
-                sqS = np.sqrt(np.maximum(S[:r_eff], 0.0))
-
-                B_init = (U[:, :r_eff] * sqS).astype(np.float32)   # (d_out, r_eff)
-                A_init = (Vt[:r_eff, :] * sqS[:, None]).astype(np.float32)  # (r_eff, d_in)
-
-                # Pad to full rank r if needed (e.g. output layer has d_out < r)
-                if r_eff < r:
-                    pad_B = np.zeros((layer.out_features, r - r_eff), dtype=np.float32)
-                    pad_A = np.zeros((r - r_eff, d_in), dtype=np.float32)
-                    B_init = np.concatenate([B_init, pad_B], axis=1)
-                    A_init = np.concatenate([A_init, pad_A], axis=0)
-
-                self._lora[i] = LoraAdapter(
-                    A=torch.from_numpy(A_init).to(self.device, dtype=self.dtype),
-                    B=torch.from_numpy(B_init).to(self.device, dtype=self.dtype),
-                )
+            # ── Step 4: truncated SVD of ΔW ───────────────────────────────────
+            try:
+                U, S, Vt = np.linalg.svd(dW_np, full_matrices=False)
+            except np.linalg.LinAlgError:
+                # SVD failed — apply full update and skip compression
+                layer.weight.data.copy_(W_after)
+                if layer.bias is not None and b_after is not None:
+                    layer.bias.data.copy_(b_after)
                 if self.verbose:
-                    print(f"  [SVD init L{i}]  ‖ΔW_ols‖={np.linalg.norm(dW):.3e}  "
-                          f"rank-{r_eff} capture={S[:r_eff].sum()/S.sum()*100:.1f}%  "
-                          f"‖BA‖={np.linalg.norm(B_init @ A_init):.3e}")
+                    print(f"  [SVD L{i}]  SVD failed — applying full ΔW")
+                continue
 
-            # ── Apply: W += B @ A  (no clip — magnitude is correct by construction)
-            for i, layer in enumerate(self._retrained_layers):
-                ada = self._lora[i]
-                if ada is not None:
-                    delta_W = ada.B @ ada.A          # (d_out, d_in)
-                    layer.weight.data.add_(delta_W)
-                    if self.verbose:
-                        print(f"  [SVD-merge L{i}]  applied  ‖BA‖={delta_W.norm().item():.3e}")
+            total_energy = float(S.sum()) if S.sum() > 0 else 1.0
+            r_eff = min(r, len(S))
+            sqS = np.sqrt(np.maximum(S[:r_eff], 0.0))
 
-        finally:
-            if was_training:
-                self.model.train()
+            B_np = (U[:, :r_eff] * sqS).astype(np.float32)            # (d_out, r_eff)
+            A_np = (Vt[:r_eff, :] * sqS[:, None]).astype(np.float32)  # (r_eff, d_in)
 
-        return {"lora_fitted": True, "n_als_sweeps": 0}
+            # Pad columns / rows to fill out rank r (zeros don't add signal)
+            if r_eff < r:
+                B_np = np.concatenate(
+                    [B_np, np.zeros((layer.out_features, r - r_eff), np.float32)], axis=1)
+                A_np = np.concatenate(
+                    [A_np, np.zeros((r - r_eff, layer.in_features), np.float32)], axis=0)
+
+            self._lora[i] = LoraAdapter(
+                A=torch.from_numpy(A_np).to(self.device, dtype=self.dtype),
+                B=torch.from_numpy(B_np).to(self.device, dtype=self.dtype),
+            )
+
+            if self.verbose:
+                capture = S[:r_eff].sum() / total_energy * 100
+                print(f"  [SVD L{i}]  ‖ΔW_ols‖={np.linalg.norm(dW_np):.3e}  "
+                      f"rank-{r_eff} capture={capture:.1f}%  "
+                      f"‖BA‖={np.linalg.norm(B_np @ A_np):.3e}")
+
+            # ── Step 5: apply low-rank weight update + full bias update ────────
+            delta_W = self._lora[i].B @ self._lora[i].A   # (d_out, d_in)
+            layer.weight.data.add_(delta_W)
+            if self.verbose:
+                print(f"  [SVD-merge L{i}]  applied  ‖BA‖={delta_W.norm().item():.3e}")
+
+            # Apply the full (uncompressed) bias update — 1-D, no need to compress
+            if layer.bias is not None and b_before[i] is not None and b_after is not None:
+                layer.bias.data.add_(b_after - b_before[i])
+
+        history["lora_fitted"] = True
+        history["n_als_sweeps"] = 0
+        return history
 
     # -----------------------------------------------------------------------
     # BCD internals
@@ -1435,4 +1425,4 @@ class OlsSMLayerRetrainer:
                 )
             g.XtX.copy_(XtX)
             g.XtY.copy_(XtY)
-            g.n_samples = int(data["n_samples"])
+            g.n_samples = int(data["n_samples"
