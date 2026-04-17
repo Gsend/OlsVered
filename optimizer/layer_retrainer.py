@@ -424,8 +424,86 @@ class OlsSMLayerRetrainer:
         try:
             if self.verbose:
                 print(f"[OlsSMLayerRetrainer] ALS-LoRA  rank={self.lora_rank}  "
-                      f"sweeps={self.lora_sweeps}  (W frozen, no OLS pre-step)")
+                      f"sweeps={self.lora_sweeps}  (W frozen, SVD-warm-start)")
+
+            # ── Pass 1: accumulate Gram matrices for OLS ──────────────────────
+            # ALS with random init diverges: uncorrelated A/B amplify noise
+            # each iteration.  Instead we do one OLS pass to get the full-rank
+            # optimal ΔW per layer, then decompose via truncated SVD to get
+            # rank-r factors (A, B) that capture the most important directions.
+            # For the output layer (rank ≤ d_out), rank-r ≥ d_out captures ΔW
+            # exactly.  ALS then refines the low-rank approximation further.
+            self._reset_grams()
+            weight_snapshot = [l.weight.data.clone() for l in self._retrained_layers]
+
+            for batch_x, batch_y in dataloader:
+                batch_x = _to_device(batch_x, self.device)
+                batch_y = batch_y.to(self.device)
+                self._act_cache.clear()
+                with torch.no_grad():
+                    _model_forward(self.model, batch_x)
+                targets_list = self._backward_propagate_targets(
+                    target_fn(batch_y).to(self.device, dtype=self.dtype),
+                    weight_snapshot,
+                )
+                for i in range(len(self._retrained_layers)):
+                    x_in = self._act_cache.get(i)
+                    if x_in is None:
+                        continue
+                    t = targets_list[i].to(self.device, dtype=self.dtype)
+                    self._accumulate_gram(i, x_in, t)
+
+            # ── Initialise LoRA from SVD of OLS solution ──────────────────────
+            r = self.lora_rank
+            self._lora = [None] * self.n_layers
+            for i, layer in enumerate(self._retrained_layers):
+                gram = self._grams[i]
+                d_in_aug = gram.XtX.shape[0]
+                d_in = layer.in_features
+
+                XtX_np = gram.XtX.cpu().numpy().astype(np.float64)
+                XtY_np = gram.XtY.cpu().numpy().astype(np.float64)
+                XtX_np += self.lambda_reg * np.eye(d_in_aug)
+
+                # Solve full-rank OLS for ΔW (residual mode, same as N=1 path)
+                W_aug_T = lu_solve_gram(XtX_np, XtY_np)   # (d_in_aug, d_out)
+                dW = W_aug_T[:d_in, :].T                   # (d_out, d_in)
+
+                # Truncated SVD → best rank-r approximation to ΔW
+                # dW = U Σ Vᵀ  →  B = U[:,:r] sqrt(Σ[:r]),  A = sqrt(Σ[:r]) Vᵀ[:r,:]
+                try:
+                    U, S, Vt = np.linalg.svd(dW, full_matrices=False)
+                except np.linalg.LinAlgError:
+                    # Fallback: small random init
+                    U  = np.random.randn(layer.out_features, r).astype(np.float32) * 0.02
+                    S  = np.ones(r, dtype=np.float32) * 0.02
+                    Vt = np.random.randn(r, d_in).astype(np.float32) * 0.02
+
+                r_eff = min(r, len(S))
+                sqS = np.sqrt(np.maximum(S[:r_eff], 0.0))
+
+                B_init = (U[:, :r_eff] * sqS).astype(np.float32)   # (d_out, r_eff)
+                A_init = (Vt[:r_eff, :] * sqS[:, None]).astype(np.float32)  # (r_eff, d_in)
+
+                # Pad to full rank r if needed (e.g. output layer has d_out < r)
+                if r_eff < r:
+                    pad_B = np.zeros((layer.out_features, r - r_eff), dtype=np.float32)
+                    pad_A = np.zeros((r - r_eff, d_in), dtype=np.float32)
+                    B_init = np.concatenate([B_init, pad_B], axis=1)
+                    A_init = np.concatenate([A_init, pad_A], axis=0)
+
+                self._lora[i] = LoraAdapter(
+                    A=torch.from_numpy(A_init).to(self.device, dtype=self.dtype),
+                    B=torch.from_numpy(B_init).to(self.device, dtype=self.dtype),
+                )
+                if self.verbose:
+                    print(f"  [SVD init L{i}]  ‖ΔW_ols‖={np.linalg.norm(dW):.3e}  "
+                          f"rank-{r_eff} capture={S[:r_eff].sum()/S.sum()*100:.1f}%  "
+                          f"‖BA‖={np.linalg.norm(B_init @ A_init):.3e}")
+
+            # ── Pass 2+: ALS refinement around the SVD warm start ─────────────
             self._fit_lora_residual(dataloader, target_fn)
+
         finally:
             if was_training:
                 self.model.train()
