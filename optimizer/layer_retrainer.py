@@ -1425,4 +1425,4 @@ class OlsSMLayerRetrainer:
                 )
             g.XtX.copy_(XtX)
             g.XtY.copy_(XtY)
-            g.n_samples = int(data["n_samples"
+            g.n_samples = int(data["n_samples"])
