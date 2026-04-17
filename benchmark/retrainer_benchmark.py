@@ -511,9 +511,9 @@ def run_lora_als(
     residual_mode = (n_layers == 1)
 
     # Same lambda scaling as run_ols — see comment there for rationale.
-    lambda_eff = lambda_reg * (10.0 ** max(0, n_layers - 1))
+    lambda_eff = min(lambda_reg * (300.0 ** max(0, n_layers - 1)), 1.0)
     if n_layers > 1:
-        print(f"  [lambda scaling]  N={n_layers}  λ={lambda_reg:.0e} → {lambda_eff:.0e}")
+        print(f"  [lambda scaling]  N={n_layers}  λ={lambda_reg:.0e} → {lambda_eff:.2e}")
 
     retrainer = OlsSMLayerRetrainer(
         model,
@@ -627,9 +627,9 @@ def run_ols(
     #   N=1 → λ=1e-4  (unchanged, proven stable)
     #   N=2 → λ=1e-3
     #   N=4 → λ=1e-1
-    lambda_eff = lambda_reg * (10.0 ** max(0, actual_n - 1))
+    lambda_eff = min(lambda_reg * (300.0 ** max(0, actual_n - 1)), 1.0)
     if actual_n > 1:
-        print(f"  [lambda scaling]  N={actual_n}  λ={lambda_reg:.0e} → {lambda_eff:.0e}")
+        print(f"  [lambda scaling]  N={actual_n}  λ={lambda_reg:.0e} → {lambda_eff:.2e}")
 
     retrainer = OlsSMLayerRetrainer(
         model,
