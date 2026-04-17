@@ -599,12 +599,14 @@ def run_ols(
     n_linear = sum(1 for m in model.modules() if isinstance(m, nn.Linear))
     actual_n = n_linear if n_layers == -1 else n_layers
 
-    # bcd_step_size < 1.0 damps each BCD update to prevent oscillation.
-    # For N=1 this has no effect (single exact solve, step_size is ignored).
-    # For N>1 the first sweep often overshoots (max|ΔW|~700) because λ is tiny
-    # relative to the Gram magnitude; α=0.5 halves the correction each sweep,
-    # allowing the coupled layer system to converge smoothly.
-    bcd_step_size = 1.0 if actual_n == 1 else 0.5
+    # residual_mode=True  (N=1):  solve for ΔW — stays close to pretrained init,
+    #                             proven effective at 84.98% on SST-2.
+    # residual_mode=False (N>1):  solve for W directly — proper Gauss-Seidel BCD.
+    #   Residual mode + multi-layer BCD is unstable: partial updates leave layers
+    #   under-corrected, each subsequent solve must compensate, causing exponential
+    #   blowup in max|ΔW|.  Full-replace BCD has exact sub-solves at each step,
+    #   which guarantees monotone convergence for Gauss-Seidel.
+    residual_mode = (actual_n == 1)
 
     retrainer = OlsSMLayerRetrainer(
         model,
@@ -615,8 +617,8 @@ def run_ols(
         lora_rank=lora_rank,
         lora_sweeps=3,
         bcd_mode=bcd_mode,
-        residual_mode=True,
-        bcd_step_size=bcd_step_size,
+        residual_mode=residual_mode,
+        bcd_step_size=1.0,
         verbose=True,
     )
     n_train, n_total = count_trainable(model)
