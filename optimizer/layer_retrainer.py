@@ -501,14 +501,20 @@ class OlsSMLayerRetrainer:
                           f"rank-{r_eff} capture={S[:r_eff].sum()/S.sum()*100:.1f}%  "
                           f"‖BA‖={np.linalg.norm(B_init @ A_init):.3e}")
 
-            # ── Pass 2+: ALS refinement around the SVD warm start ─────────────
-            self._fit_lora_residual(dataloader, target_fn)
+            # ── Apply: W += B @ A  (no clip — magnitude is correct by construction)
+            for i, layer in enumerate(self._retrained_layers):
+                ada = self._lora[i]
+                if ada is not None:
+                    delta_W = ada.B @ ada.A          # (d_out, d_in)
+                    layer.weight.data.add_(delta_W)
+                    if self.verbose:
+                        print(f"  [SVD-merge L{i}]  applied  ‖BA‖={delta_W.norm().item():.3e}")
 
         finally:
             if was_training:
                 self.model.train()
 
-        return {"lora_fitted": True, "n_als_sweeps": self.lora_sweeps}
+        return {"lora_fitted": True, "n_als_sweeps": 0}
 
     # -----------------------------------------------------------------------
     # BCD internals
