@@ -329,6 +329,25 @@ class OlsSMLayerRetrainer:
           if self.n_layers == 1:
               return self._single_layer_retrain(dataloader, target_fn)
 
+          # ── Warm-start: pre-solve the output layer before BCD ─────────────
+          # For N>1, the last layer (classifier) is typically randomly
+          # initialised near zero while its OLS optimum is far away.
+          # If we let BCD discover this in sweep 1, L_last takes a huge
+          # unconstrained jump (up to ||W_OLS||_∞) which then distorts the
+          # backward-projected targets for all earlier layers and causes
+          # amplifying oscillation.
+          #
+          # Calling _final_output_layer_solve here gives the last layer a
+          # near-optimal starting point (given the current earlier-layer
+          # activations).  Subsequent BCD sweeps then only need to make
+          # small corrections as earlier layers adapt, keeping all updates
+          # in a well-conditioned regime.
+          if self.verbose:
+              print("[BCD warm-start]  Pre-solving output layer (N=1 OLS) …")
+          delta_ws = self._final_output_layer_solve(dataloader, target_fn)
+          if self.verbose:
+              print(f"[BCD warm-start]  done.  max|ΔW_last| = {delta_ws:.2e}")
+
           # ── BCD loop ───────────────────────────────────────────────────────
           _sweep_fn = (self._bcd_sweep_gauss_seidel
                        if self.bcd_mode == "gauss_seidel"
