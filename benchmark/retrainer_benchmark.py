@@ -510,7 +510,12 @@ def run_lora_als(
     # (full-replace BCD; residual_mode=True with BCD causes exponential blowup).
     residual_mode = (n_layers == 1)
 
-    # Same lambda scaling as run_ols — see comment there for rationale.
+    # Same stability recipe as run_ols: warm-start + 1 BCD sweep for N>1.
+    # See run_ols comment for full rationale.
+    max_sweeps_eff = 1 if n_layers > 1 else 5   # N=1 uses retrain_lora_als internal ALS
+    if n_layers > 1:
+        print(f"  [BCD stability]  N={n_layers}  → capped at max_sweeps=1")
+
     lambda_eff = min(lambda_reg * (300.0 ** max(0, n_layers - 1)), 1.0)
     if n_layers > 1:
         print(f"  [lambda scaling]  N={n_layers}  λ={lambda_reg:.0e} → {lambda_eff:.2e}")
@@ -618,15 +623,28 @@ def run_ols(
     #   which guarantees monotone convergence for Gauss-Seidel.
     residual_mode = (actual_n == 1)
 
-    # Scale lambda_reg with n_layers for BCD stability.
-    # With N>1 the Gauss-Seidel BCD couples layers: an over-large solution in
-    # the output layer projects extreme backward targets to earlier layers, which
-    # in turn produce a corrective update that again over-shoots.  Increasing λ
-    # dampens each layer's OLS solution, keeping the coupled system bounded.
-    # Factor of 10 per additional layer is empirically stable on BERT+SST-2:
-    #   N=1 → λ=1e-4  (unchanged, proven stable)
-    #   N=2 → λ=1e-3
-    #   N=4 → λ=1e-1
+    # BCD stability for N>1:
+    #
+    # For N=1 the single-layer solve is provably optimal in one pass.
+    #
+    # For N>1, Gauss-Seidel BCD with a randomly-initialised output layer
+    # (e.g. BERT classifier head) diverges after sweep 1:
+    #   - The output layer's OLS solution is far from its random init →
+    #     huge first-sweep jump → distorted backward targets → cascade.
+    # The warm-start in retrain() (added to layer_retrainer.py) pre-solves
+    # the output layer once so sweep 1 only makes a small correction.
+    # However, sweep 2+ still diverges as partial tanh saturation makes
+    # XtX near-rank-deficient and small eigenvalues amplify XtY by 1/(2λ).
+    #
+    # Stable recipe: warm-start (in optimizer) + exactly 1 BCD sweep.
+    # The single sweep updates the earlier layers given the well-initialised
+    # output layer, then re-solves the output layer for the new activations.
+    # This is equivalent to greedy layer-wise OLS and is provably bounded.
+    max_sweeps_eff = 1 if actual_n > 1 else max_sweeps
+    if actual_n > 1:
+        print(f"  [BCD stability]  N={actual_n}  → capped at max_sweeps=1  "
+              f"(warm-start + 1 sweep, avoids sweep-2+ divergence)")
+
     lambda_eff = min(lambda_reg * (300.0 ** max(0, actual_n - 1)), 1.0)
     if actual_n > 1:
         print(f"  [lambda scaling]  N={actual_n}  λ={lambda_reg:.0e} → {lambda_eff:.2e}")
@@ -635,7 +653,7 @@ def run_ols(
         model,
         n_layers=actual_n,
         lambda_reg=lambda_eff,
-        max_sweeps=max_sweeps,
+        max_sweeps=max_sweeps_eff,
         tol=1e-5,
         lora_rank=lora_rank,
         lora_sweeps=3,
