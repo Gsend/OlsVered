@@ -982,6 +982,13 @@ def main():
     ]
 
     for mode in modes:
+        # Re-seed BEFORE every mode so each one starts from an identical RNG
+        # state.  Without this, modes that run later in the suite see an
+        # advanced RNG (earlier modes' DataLoader shuffles and dropout draws
+        # consume random numbers), producing different results than if the
+        # same mode ran in isolation.  Observed 7+pp accuracy swing on
+        # ols_n1 between standalone runs and multi-mode suites.
+        _set_all_seeds(args.seed)
         try:
             if mode == "adam":
                 r = run_adam(model_init, train_loader, eval_loader, device,
