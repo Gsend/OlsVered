@@ -37,6 +37,7 @@ import argparse
 import copy
 import json
 import sys
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,21 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def _set_all_seeds(seed: int) -> None:
+    """Pin every RNG that affects benchmark outputs.
+
+    Includes Python ``random``, NumPy, CPU torch, and CUDA torch (all devices).
+    Call this BEFORE ``AutoModelForSequenceClassification.from_pretrained`` so
+    the freshly-initialised classifier head is reproducible, otherwise the
+    pretrained baseline varies by several points between runs.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -880,6 +896,10 @@ def parse_args():
                         "gauss_seidel updates each layer immediately so subsequent "
                         "layers see the correction; costs N forward passes per sweep "
                         "instead of 1, but converges monotonically.")
+    p.add_argument("--seed",        type=int, default=42,
+                   help="Master seed for Python/NumPy/torch/CUDA RNGs. Pins the "
+                        "randomly-initialised classifier head (otherwise the "
+                        "pretrained baseline varies 43-51 percent between runs).")
     p.add_argument("--no-plots",    action="store_true")
     p.add_argument("--tag",         default="",
                    help="Optional tag appended to output filenames")
@@ -917,7 +937,14 @@ def main():
     print(f"  Modes  : {', '.join(modes)}")
     print(f"  Device : {device}  "
           f"({torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'})")
+    print(f"  Seed   : {args.seed}")
     print("=" * 70)
+
+    # ── Seed all RNGs BEFORE model init ───────────────────────────────────────
+    # Pins the randomly-initialised classifier head (HF creates a fresh
+    # nn.Linear head for BERT because the checkpoint lacks one).  Without this
+    # the pretrained baseline swings several points between runs.
+    _set_all_seeds(args.seed)
 
     # ── Load model + tokenizer ────────────────────────────────────────────────
     print("\nLoading model and tokenizer ...")

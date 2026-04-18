@@ -33,6 +33,9 @@
 #    --bcd-mode    STR  BCD variant for OLS modes (default: gauss_seidel)
 #                         jacobi         — simultaneous updates, 1 pass/sweep
 #                         gauss_seidel   — sequential updates, N passes/sweep
+#    --seed        N    Master RNG seed (default: 42). Pins the random
+#                         classifier-head init so the pretrained baseline
+#                         is reproducible across runs.
 #    --tag         STR  Optional tag appended to result filenames
 #    --no-plots         Skip matplotlib plots
 #    --no-setup         Skip venv / pip / maturin setup (repeat runs)
@@ -65,6 +68,7 @@ EPOCHS=1
 MAX_SWEEPS=5
 LAMBDA_REG="1e-4"
 BCD_MODE="gauss_seidel"
+SEED=42
 TAG=""
 NO_PLOTS=false
 RUN_SETUP=true
@@ -91,6 +95,7 @@ while [[ $# -gt 0 ]]; do
         --max-sweeps)  MAX_SWEEPS="$2";  shift 2 ;;
         --lambda-reg)  LAMBDA_REG="$2";  shift 2 ;;
         --bcd-mode)    BCD_MODE="$2";    shift 2 ;;
+        --seed)        SEED="$2";        shift 2 ;;
         --tag)         TAG="$2";         shift 2 ;;
         --no-plots)    NO_PLOTS=true;    shift   ;;
         --no-setup)    RUN_SETUP=false;  shift   ;;
@@ -223,6 +228,7 @@ PY_CMD+=" --epochs ${EPOCHS}"
 PY_CMD+=" --max-sweeps ${MAX_SWEEPS}"
 PY_CMD+=" --lambda-reg ${LAMBDA_REG}"
 PY_CMD+=" --bcd-mode ${BCD_MODE}"
+PY_CMD+=" --seed ${SEED}"
 [[ -n "$MAX_TRAIN" ]]  && PY_CMD+=" --max-train ${MAX_TRAIN}"
 [[ -n "$TAG" ]]        && PY_CMD+=" --tag ${TAG}"
 [[ "$NO_PLOTS" == true ]] && PY_CMD+=" --no-plots"
