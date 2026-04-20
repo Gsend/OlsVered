@@ -1,0 +1,25 @@
+[package]
+name = "olssm_vision"
+version = "0.1.0"
+edition = "2021"
+description = "SLAM / AR / SfM applications of the olssm closed-form OLS kernels: selected inverse, semi-partial correlation diagnostics, Schur-complement BA solver."
+license = "MIT"
+
+[lib]
+name = "olssm_vision"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+olssm     = { path = ".." }
+nalgebra  = { version = "0.33", features = ["std"] }
+thiserror = "1.0"
+pyo3      = { version = "0.21", features = ["extension-module"], optional = true }
+numpy     = { version = "0.21", optional = true }
+
+[features]
+default = []
+python  = ["pyo3", "numpy"]
+extension-module = ["python"]
+
+[dev-dependencies]
+approx = "0.5"
