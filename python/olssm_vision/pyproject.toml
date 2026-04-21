@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.4"]
+build-backend = "maturin"
+
+[project]
+name = "olssm_vision"
+version = "0.1.0"
+description = "SLAM / AR / SfM primitives on top of olssm — covariance recovery, gauge diagnostics, Schur BA."
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.23",
+    "olssm>=0.1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "scipy>=1.10"]
+benchmark = ["scipy>=1.10", "gtsam>=4.2", "pycolmap>=0.6"]
+
+[tool.maturin]
+module-name = "olssm_vision._rust"
+manifest-path = "../../olssm_vision/Cargo.toml"
+features = ["python"]
+python-source = "."
