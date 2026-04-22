@@ -513,7 +513,7 @@ def run_bert_benchmark(device, args):
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=3e-3,
-                               factor_update_freq=20, inv_update_freq=50,
+                               factor_update_freq=20, inv_update_freq=5,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=128, momentum=0.0,
                                grad_clip=1.0, gamma=0.95)
@@ -596,7 +596,7 @@ def run_bert_benchmark(device, args):
         damp_decay_step0    = None   # training step at trigger
         damp_decay_steps    = None   # steps over which to decay (= ACC_DECAY_STEPS)
 
-        while step < args.max_steps_bert:
+        while step < 1400: #args.max_steps_bert:
             try: batch = next(data_iter)
             except StopIteration:
                 data_iter = iter(train_loader); batch = next(data_iter)
