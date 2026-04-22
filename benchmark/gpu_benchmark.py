@@ -596,7 +596,9 @@ def run_bert_benchmark(device, args):
         damp_decay_step0    = None   # training step at trigger
         damp_decay_steps    = None   # steps over which to decay (= ACC_DECAY_STEPS)
 
-        while step < 1400: #args.max_steps_bert:
+        while step < args.max_steps_bert:
+            if step > 2000:
+                break
             try: batch = next(data_iter)
             except StopIteration:
                 data_iter = iter(train_loader); batch = next(data_iter)
