@@ -585,13 +585,16 @@ def run_bert_benchmark(device, args):
         # over ACC_DECAY_STEPS remaining steps.  Stops the high-LR plateau that
         # follows early K-FAC convergence without shortening the warmup phase.
         ACC_DECAY_THRESHOLD = 0.91   # trigger accuracy
-        ACC_DECAY_STEPS     = 2000   # steps to reach eta_min after trigger
+        ACC_DECAY_STEPS     = 2000   # steps for cosine LR decay after trigger
         acc_decay_triggered = False
+        acc_decay_step0     = None   # step index when trigger fired
+        acc_decay_eta_min   = None   # eta_min locked in at trigger (for clamping)
+        acc_decay_complete  = False  # True once LR has reached eta_min and is locked
         # Damping cosine decay state (set at trigger, applied each step)
         damp_decay_start    = None   # damping value at trigger
-        damp_decay_end      = 2e-4   # target damping at end of training
+        damp_decay_end      = 2e-4   # target damping at end of decay window
         damp_decay_step0    = None   # training step at trigger
-        damp_decay_steps    = None   # total steps over which to decay
+        damp_decay_steps    = None   # steps over which to decay (= ACC_DECAY_STEPS)
 
         while step < args.max_steps_bert:
             try: batch = next(data_iter)
@@ -611,7 +614,15 @@ def run_bert_benchmark(device, args):
             opt.step()
             t_opt_done = time.perf_counter()
 
-            scheduler.step()
+            if not acc_decay_complete:
+                scheduler.step()
+            # Once ACC_DECAY_STEPS have elapsed since trigger, lock LR at eta_min
+            # so CosineAnnealingLR doesn't cycle back upward.
+            if acc_decay_step0 is not None and not acc_decay_complete:
+                if (step - acc_decay_step0) >= ACC_DECAY_STEPS:
+                    for _g in opt.param_groups:
+                        _g['lr'] = acc_decay_eta_min
+                    acc_decay_complete = True
             # Cosine-decay damping in lockstep with LR after threshold trigger
             if damp_decay_start is not None and hasattr(opt, 'damping'):
                 import math
@@ -635,28 +646,32 @@ def run_bert_benchmark(device, args):
                 if cfg['kfac'] and not acc_decay_triggered and va >= ACC_DECAY_THRESHOLD:
                     acc_decay_triggered = True
                     eta_min = cfg['lr'] * 0.002
-                    # Use remaining steps so cosine reaches eta_min exactly at
-                    # the end of training — no cycling, no LR bouncing back up.
-                    remaining_steps = max(1, args.max_steps_bert - step)
+                    acc_decay_eta_min = eta_min
+                    acc_decay_step0   = step
+                    # Decay over ACC_DECAY_STEPS (not remaining_steps).
+                    # Using remaining_steps made the cosine window ~7k steps,
+                    # so LR barely moved for hundreds of steps after the trigger
+                    # — causing continued val_acc oscillation.  A fixed 2000-step
+                    # window drops LR from current → eta_min in ~4% of total
+                    # budget, tight enough to suppress fluctuations.  After the
+                    # window, LR is clamped at eta_min (no cosine cycling back up).
                     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                        opt, T_max=remaining_steps, eta_min=eta_min)
-                    # Decay damping gradually (cosine) alongside LR rather than
-                    # dropping it instantly.  An instantaneous 15× damping drop
-                    # explodes the K-FAC preconditioned step before LR has had
-                    # any chance to shrink, collapsing the model to ~50% acc.
+                        opt, T_max=ACC_DECAY_STEPS, eta_min=eta_min)
+                    # Decay damping over same window (gradual, not instantaneous —
+                    # instantaneous 15× drop caused model collapse to ~49% acc).
                     if hasattr(opt, 'damping'):
                         damp_decay_start = opt.damping
                         damp_decay_step0 = step
-                        damp_decay_steps = remaining_steps
+                        damp_decay_steps = ACC_DECAY_STEPS
                         print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
-                              f"cosine decay over {remaining_steps} remaining steps "
+                              f"cosine decay over {ACC_DECAY_STEPS} steps "
                               f"(lr {cur_lr:.2e} → {eta_min:.2e}), "
                               f"damping {damp_decay_start:.0e} → {damp_decay_end:.0e} "
-                              f"[gradual cosine] ***")
+                              f"[gradual cosine, then locked] ***")
                     else:
                         print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
-                              f"cosine decay over {remaining_steps} remaining steps "
-                              f"(lr {cur_lr:.2e} → {eta_min:.2e}) ***")
+                              f"cosine decay over {ACC_DECAY_STEPS} steps "
+                              f"(lr {cur_lr:.2e} → {eta_min:.2e}, then locked) ***")
                 print(f"     step={step:5d}  samples={samples_seen:7,}  "
                       f"val_acc={va:.4f}  val_loss={vl:.4f}  "
                       f"lr={cur_lr:.2e}  wall={wall/60:.1f}min  "
