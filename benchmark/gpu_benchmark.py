@@ -94,6 +94,77 @@ def save_result_incremental(result: dict, task: str):
                 f"{result['p99_opt_ms']:.2f},{result['peak_mem_gb']:.3f},{pwr},"
                 f"{final_acc},{final_loss}\n")
     print(f"  ✓  Saved → {json_path.name}  |  {csv_path.name}")
+    git_commit_and_push_results(result, json_path, csv_path)
+
+# ─── Git result publishing ─────────────────────────────────────────────────
+
+def git_commit_and_push_results(result: dict, json_path: Path, csv_path: Path):
+    """Stage the just-written result files, commit, and push to origin.
+
+    Failures are printed as warnings and never propagate — a git problem
+    must not abort a benchmark that may have taken hours to reach this point.
+    """
+    repo_root = Path(__file__).parent.parent
+
+    # ── Build a descriptive commit message ───────────────────────────────────
+    task   = result.get("task", "unknown")
+    name   = result.get("name", "unknown")
+    wall   = result.get("wall_s")
+    wall_s = f"{wall/60:.1f} min" if wall else "?"
+
+    acc_curve  = result.get("curve_val_acc") or []
+    ppl_curve  = result.get("curve_val_ppl") or []
+    loss_curve = result.get("curve_val_loss") or []
+
+    if acc_curve:
+        metric = f"acc={acc_curve[-1]:.4f}"
+    elif ppl_curve:
+        metric = f"ppl={ppl_curve[-1]:.1f}"
+    elif loss_curve:
+        metric = f"loss={loss_curve[-1]:.4f}"
+    else:
+        metric = "no-metric"
+
+    gpu  = (result.get("hw") or {}).get("gpu_name", "unknown-gpu")
+    msg  = f"results: {task} {name} — {metric}  wall={wall_s}  [{gpu}]"
+
+    try:
+        # Stage only the two result files (never touches source code)
+        subprocess.run(
+            ["git", "add", str(json_path), str(csv_path)],
+            cwd=repo_root, check=True, capture_output=True, text=True
+        )
+
+        # Check whether there is actually anything new to commit
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=repo_root, capture_output=True
+        )
+        if diff.returncode == 0:
+            print("  git  nothing new to commit (result files unchanged).")
+            return
+
+        subprocess.run(
+            ["git", "commit", "-m", msg],
+            cwd=repo_root, check=True, capture_output=True, text=True
+        )
+        print(f"  git  committed: {msg}")
+
+        push = subprocess.run(
+            ["git", "push"],
+            cwd=repo_root, capture_output=True, text=True
+        )
+        if push.returncode == 0:
+            print("  git  pushed to origin.")
+        else:
+            print(f"  git  push failed (will retry on next result):\n"
+                  f"       {push.stderr.strip()}")
+
+    except subprocess.CalledProcessError as e:
+        print(f"  git  WARNING — commit failed (results are still saved locally):\n"
+              f"       {e.stderr.strip() if e.stderr else e}")
+    except Exception as e:
+        print(f"  git  WARNING — unexpected error ({e}); results saved locally.")
 
 # ─── Hardware fingerprint ─────────────────────────────────────────────────
 
