@@ -486,8 +486,8 @@ def run_bert_benchmark(device, args):
 
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
-        dict(name="OlsSMKFAC", B=512, lr=2e-3, kfac=True,  randomised=True),
-        dict(name="ClassicKFAC",  B=512, lr=2e-3, kfac=True,  randomised=False),
+        dict(name="OlsSMKFAC", B=512, lr=3e-3, kfac=True,  randomised=True),
+        dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -543,7 +543,12 @@ def run_bert_benchmark(device, args):
         CKPT_KFAC  = OUT / f"bert_ckpt_{ckpt_name}_kfac.pt"
         CKPT_META  = OUT / f"bert_ckpt_{ckpt_name}_meta.pt"
 
-        # Resume from checkpoint if available
+        # Resume from checkpoint if available (skip when --fresh is set)
+        if getattr(args, 'fresh', False):
+            for _ckpt in [CKPT_MODEL, CKPT_OPT, CKPT_KFAC, CKPT_META]:
+                if _ckpt.exists():
+                    _ckpt.unlink()
+            print("     --fresh: cleared existing BERT checkpoints, starting from scratch.")
         step = samples_seen = 0
         curve_steps=[]; curve_samples=[]; curve_times=[]
         curve_val_acc=[]; curve_val_loss=[]
@@ -597,7 +602,8 @@ def run_bert_benchmark(device, args):
         damp_decay_steps    = None   # steps over which to decay (= ACC_DECAY_STEPS)
 
         while step < args.max_steps_bert:
-            if step > 2000:
+            if args.max_wall_bert > 0 and time.perf_counter() - t0 > args.max_wall_bert:
+                print(f"     Wall-time limit {args.max_wall_bert/60:.0f} min reached at step {step} — stopping.")
                 break
             try: batch = next(data_iter)
             except StopIteration:
@@ -1629,7 +1635,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", choices=["mlp","bert","cifar","scaling","transformer","all"], default="all")
     parser.add_argument("--max-steps-mlp",   type=int, default=3000)
-    parser.add_argument("--max-steps-bert",  type=int, default=5000)
+    parser.add_argument("--max-steps-bert",  type=int, default=3000)
+    parser.add_argument("--max-wall-bert",   type=float, default=1200.0,
+                        help="Maximum wall-clock seconds for BERT training (default 1200 = 20 min). "
+                             "0 = no wall-time limit.")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Ignore existing BERT checkpoints and start from scratch.")
     parser.add_argument("--max-steps-cifar",   type=int, default=5000)
     parser.add_argument("--max-steps-transformer", type=int, default=5000,
                         help="Training steps for the from-scratch transformer task")
