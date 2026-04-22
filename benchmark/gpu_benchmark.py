@@ -486,8 +486,8 @@ def run_bert_benchmark(device, args):
 
     configs = [
         dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
-        dict(name="OlsSMKFAC", B=512, lr=6e-4, kfac=True,  randomised=True),
-        dict(name="ClassicKFAC",  B=512, lr=6e-4, kfac=True,  randomised=False),
+        dict(name="OlsSMKFAC", B=512, lr=2e-3, kfac=True,  randomised=True),
+        dict(name="ClassicKFAC",  B=512, lr=2e-3, kfac=True,  randomised=False),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
