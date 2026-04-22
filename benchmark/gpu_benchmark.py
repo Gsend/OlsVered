@@ -66,6 +66,8 @@ def to_serialisable(obj):
 
 def save_result_incremental(result: dict, task: str):
     """Save a single optimizer result immediately after it completes."""
+    # Stamp hardware provenance onto result (shallow copy so caller dict is unchanged)
+    result = {**result, "hw": HW_INFO}
     name_slug = result["name"].lower().replace(" ", "_")
     # ── JSON (full detail) ──
     json_path = OUT / f"{task}_{name_slug}_result.json"
@@ -92,6 +94,55 @@ def save_result_incremental(result: dict, task: str):
                 f"{result['p99_opt_ms']:.2f},{result['peak_mem_gb']:.3f},{pwr},"
                 f"{final_acc},{final_loss}\n")
     print(f"  ✓  Saved → {json_path.name}  |  {csv_path.name}")
+
+# ─── Hardware fingerprint ─────────────────────────────────────────────────
+
+def get_hardware_info() -> dict:
+    """Collect GPU, CPU, RAM and software versions for result provenance."""
+    import platform, multiprocessing
+    hw = {}
+
+    # GPU
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        hw["gpu_name"]       = torch.cuda.get_device_name(0)
+        hw["gpu_vram_gb"]    = round(props.total_memory / 1e9, 2)
+        hw["gpu_count"]      = torch.cuda.device_count()
+        hw["cuda_version"]   = torch.version.cuda
+        hw["gpu_sm"]         = f"sm_{props.major}{props.minor}"
+    else:
+        hw["gpu_name"] = "none"
+
+    # Driver version via nvidia-smi
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5
+        )
+        hw["gpu_driver"] = out.stdout.strip().split("\n")[0]
+    except Exception:
+        hw["gpu_driver"] = None
+
+    # CPU / RAM
+    hw["cpu"]        = platform.processor() or platform.machine()
+    hw["cpu_cores"]  = multiprocessing.cpu_count()
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal"):
+                    hw["ram_gb"] = round(int(line.split()[1]) / 1e6, 1)
+                    break
+    except Exception:
+        hw["ram_gb"] = None
+
+    # Software
+    hw["torch_version"]  = torch.__version__
+    hw["python_version"] = platform.python_version()
+
+    return hw
+
+# Collected once at import time; injected into every result dict.
+HW_INFO: dict = {}   # populated in main() after CUDA is initialised
 
 # ─── GPU utilities ────────────────────────────────────────────────────────
 
@@ -1506,6 +1557,11 @@ def main():
     print("\nOlsSMKFAC GPU Benchmark")
     print("="*70)
     device = get_device()
+
+    global HW_INFO
+    HW_INFO = get_hardware_info()
+    print(f"  Hardware: {HW_INFO.get('gpu_name')}  |  driver {HW_INFO.get('gpu_driver')}  "
+          f"|  CUDA {HW_INFO.get('cuda_version')}  |  torch {HW_INFO.get('torch_version')}")
 
     all_results = []
 
