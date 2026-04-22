@@ -587,6 +587,11 @@ def run_bert_benchmark(device, args):
         ACC_DECAY_THRESHOLD = 0.91   # trigger accuracy
         ACC_DECAY_STEPS     = 2000   # steps to reach eta_min after trigger
         acc_decay_triggered = False
+        # Damping cosine decay state (set at trigger, applied each step)
+        damp_decay_start    = None   # damping value at trigger
+        damp_decay_end      = 2e-4   # target damping at end of training
+        damp_decay_step0    = None   # training step at trigger
+        damp_decay_steps    = None   # total steps over which to decay
 
         while step < args.max_steps_bert:
             try: batch = next(data_iter)
@@ -607,6 +612,12 @@ def run_bert_benchmark(device, args):
             t_opt_done = time.perf_counter()
 
             scheduler.step()
+            # Cosine-decay damping in lockstep with LR after threshold trigger
+            if damp_decay_start is not None and hasattr(opt, 'damping'):
+                import math
+                t = min(step - damp_decay_step0, damp_decay_steps)
+                cos_factor = 0.5 * (1 + math.cos(math.pi * t / damp_decay_steps))
+                opt.damping = damp_decay_end + (damp_decay_start - damp_decay_end) * cos_factor
             power_mon.sample()
             fwdbwd_times.append(t_fwd_done - t_fwd)
             opt_times.append(t_opt_done - t_opt)
@@ -620,7 +631,7 @@ def run_bert_benchmark(device, args):
                 curve_val_loss.append(vl)
                 next_record += record_every_n
                 cur_lr = scheduler.get_last_lr()[0]
-                # Threshold-triggered LR decay + damping reduction
+                # Threshold-triggered LR decay + gradual damping decay
                 if cfg['kfac'] and not acc_decay_triggered and va >= ACC_DECAY_THRESHOLD:
                     acc_decay_triggered = True
                     eta_min = cfg['lr'] * 0.002
@@ -629,15 +640,19 @@ def run_bert_benchmark(device, args):
                     remaining_steps = max(1, args.max_steps_bert - step)
                     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                         opt, T_max=remaining_steps, eta_min=eta_min)
-                    # Drop damping so K-FAC keeps using curvature at low LR.
-                    # High damping + decaying LR → near-zero effective update.
+                    # Decay damping gradually (cosine) alongside LR rather than
+                    # dropping it instantly.  An instantaneous 15× damping drop
+                    # explodes the K-FAC preconditioned step before LR has had
+                    # any chance to shrink, collapsing the model to ~50% acc.
                     if hasattr(opt, 'damping'):
-                        old_damp = opt.damping
-                        opt.damping = 2e-4
+                        damp_decay_start = opt.damping
+                        damp_decay_step0 = step
+                        damp_decay_steps = remaining_steps
                         print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
                               f"cosine decay over {remaining_steps} remaining steps "
                               f"(lr {cur_lr:.2e} → {eta_min:.2e}), "
-                              f"damping {old_damp:.0e} → {opt.damping:.0e} ***")
+                              f"damping {damp_decay_start:.0e} → {damp_decay_end:.0e} "
+                              f"[gradual cosine] ***")
                     else:
                         print(f"     *** Accuracy threshold {ACC_DECAY_THRESHOLD:.0%} reached — "
                               f"cosine decay over {remaining_steps} remaining steps "
