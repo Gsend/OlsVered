@@ -1,6 +1,6 @@
 """
-Training benchmark: Adam vs ClassicKFAC vs OlsSMKFAC
-========================================================
+Training benchmark: Adam vs ClassicKFAC vs OlsSMKFAC vs VeredKFAC
+===================================================================
 
 Trains a 4-layer MLP on MNIST and compares:
   - Steps to reach target accuracy
@@ -8,20 +8,25 @@ Trains a 4-layer MLP on MNIST and compares:
   - Per-step optimizer overhead
 
 Run from the repo root:
-    python benchmark/training_benchmark.py
+    python benchmark/training_benchmark.py [--log-level {DEBUG,INFO,WARNING}]
+
+Examples:
+    python benchmark/training_benchmark.py                      # default: INFO
+    python benchmark/training_benchmark.py --log-level DEBUG    # verbose math logging
+    python benchmark/training_benchmark.py --log-level WARNING  # quiet
 
 Outputs:
   - benchmark/results/training_results.json
-  - benchmark/results/loss_vs_steps.png
-  - benchmark/results/loss_vs_time.png
-  - benchmark/results/accuracy_vs_steps.png
+  - benchmark/results/training_comparison.png
   - Console table summarising all optimizers
 
 Requirements:
     pip install torch torchvision matplotlib
 """
 
+import argparse
 import json
+import logging
 import os
 import sys
 import time
@@ -39,6 +44,7 @@ from torchvision import datasets, transforms
 
 from optimizer.olssm_kfac import OlsSMKFAC
 from optimizer.classic_kfac import ClassicKFAC
+from optimizer.vered_kfac import VeredKFAC
 
 # ── Reproducibility ───────────────────────────────────────────────────────────
 SEED = 42
@@ -269,6 +275,16 @@ def make_olssm_rank32(model):
         grad_clip=KFAC_CLIP,
     )
 
+def make_vered_kfac(model):
+    return VeredKFAC(
+        model,
+        lr=LR_KFAC,
+        damping=5e-3,
+        factor_update_freq=KFAC_FREQ,
+        momentum=0.0,
+        grad_clip=KFAC_CLIP,
+    )
+
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
 def plot_results(all_results, results_dir):
@@ -281,11 +297,12 @@ def plot_results(all_results, results_dir):
         return
 
     colors = {
-        "Adam":              "#2196F3",
-        "SGD+momentum":      "#9E9E9E",
-        "ClassicKFAC":       "#F44336",
+        "Adam":               "#2196F3",
+        "SGD+momentum":       "#9E9E9E",
+        "ClassicKFAC":        "#F44336",
         "OlsSMKFAC-adaptive": "#4CAF50",
         "OlsSMKFAC-rank32":   "#FF9800",
+        "VeredKFAC":          "#9C27B0",
     }
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -369,17 +386,66 @@ def print_summary(all_results):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="Optimizer benchmark: Adam / SGD / ClassicKFAC / OlsSMKFAC / VeredKFAC"
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity.  Use DEBUG to trace every math call in the optimizer. "
+             "Default: INFO.",
+    )
+    parser.add_argument(
+        "--optimizers",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help="Run only the named optimizers (e.g. --optimizers Adam VeredKFAC). "
+             "Default: all.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = _parse_args()
+
+    # ── Logging setup ─────────────────────────────────────────────────────────
+    log_level = getattr(logging, args.log_level.upper())
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s  %(name)-35s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Suppress verbose third-party noise even in DEBUG mode
+    for noisy in ("PIL", "matplotlib", "torch"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    if log_level == logging.DEBUG:
+        print(f"[benchmark] DEBUG logging enabled — optimizer math will be traced.")
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     train_loader, val_loader = get_loaders()
 
-    configs = [
+    all_configs = [
         ("OlsSMKFAC-adaptive",   make_olssm_adaptive),
         ("OlsSMKFAC-rank32",     make_olssm_rank32),
-        ("ClassicKFAC",             make_classic_kfac),
-        ("Adam",                    make_adam),
-        ("SGD+momentum",            make_sgd),
+        ("ClassicKFAC",          make_classic_kfac),
+        ("VeredKFAC",            make_vered_kfac),
+        ("Adam",                 make_adam),
+        ("SGD+momentum",         make_sgd),
     ]
+
+    if args.optimizers:
+        requested = set(args.optimizers)
+        configs = [(n, f) for n, f in all_configs if n in requested]
+        missing = requested - {n for n, _ in configs}
+        if missing:
+            print(f"[benchmark] WARNING: unknown optimizer(s): {missing}")
+            print(f"[benchmark] Available: {[n for n, _ in all_configs]}")
+    else:
+        configs = all_configs
 
     all_results = []
     for name, factory in configs:
