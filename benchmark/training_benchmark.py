@@ -1,24 +1,34 @@
 """
-Training benchmark: Adam vs ClassicKFAC vs OlsSMKFAC vs VeredKFAC
+K-FAC algorithm comparison: ClassicKFAC vs OlsSMKFAC vs VeredKFAC
 ===================================================================
 
-Trains a 4-layer MLP on MNIST and compares:
+Trains a 4-layer MLP on MNIST under identical conditions (same model
+init, same lr/damping/update-frequency) and measures:
   - Steps to reach target accuracy
   - Wall-clock time to reach target accuracy
   - Per-step optimizer overhead
 
+The three K-FAC algorithms differ only in how they handle the Fisher factor:
+  ClassicKFAC — forms Gram matrix XᵀX then inverts (κ(X)⁴ error scaling)
+  OlsSMKFAC   — forms Gram matrix XᵀX then Cholesky (κ(X)² error scaling)
+  VeredKFAC   — QR on raw X directly, never forms Gram (κ(X)¹ error scaling)
+
+Adam is included as a first-order baseline for context.
+
 Run from the repo root:
-    python benchmark/training_benchmark.py [--log-level {DEBUG,INFO,WARNING}]
+    python benchmark/training_benchmark.py [options]
 
 Examples:
-    python benchmark/training_benchmark.py                      # default: INFO
-    python benchmark/training_benchmark.py --log-level DEBUG    # verbose math logging
-    python benchmark/training_benchmark.py --log-level WARNING  # quiet
+    python benchmark/training_benchmark.py                       # 3-way K-FAC + Adam
+    python benchmark/training_benchmark.py --include-sgd         # add SGD baseline
+    python benchmark/training_benchmark.py --log-level DEBUG     # verbose math logging
+    python benchmark/training_benchmark.py --log-level WARNING   # quiet
 
 Outputs:
   - benchmark/results/training_results.json
-  - benchmark/results/training_comparison.png
-  - Console table summarising all optimizers
+  - benchmark/results/training_comparison.png  (loss + accuracy curves)
+  - benchmark/results/kfac_comparison.png      (K-FAC-only close-up)
+  - Console table with cross-K-FAC speedup ratios
 
 Requirements:
     pip install torch torchvision matplotlib
@@ -50,16 +60,22 @@ from optimizer.vered_kfac import VeredKFAC
 SEED = 42
 torch.manual_seed(SEED)
 
-# ── Config ────────────────────────────────────────────────────────────────────
-MAX_STEPS    = 600          # hard cap per optimizer
-TARGET_ACC   = 0.98         # stop early when train accuracy >= this
-BATCH_SIZE   = 64
-KFAC_FREQ    = 10           # K-FAC update frequency (steps)
-LR_ADAM      = 1e-3
-LR_KFAC      = 1e-2         # higher than Adam — natural gradient is already curvature-scaled
-DAMPING      = 1e-2
-KFAC_CLIP    = 10.0         # max natural-gradient norm per layer
-RESULTS_DIR  = ROOT / "benchmark" / "results"
+# ── Shared K-FAC hyperparameters (identical across all three methods) ─────────
+# Keeping these the same is what makes the comparison fair — any difference
+# in convergence reflects the algorithm, not the tuning.
+MAX_STEPS         = 600     # hard cap per optimizer
+TARGET_ACC        = 0.98    # stop early when train accuracy >= this
+BATCH_SIZE        = 64
+KFAC_FREQ         = 20      # factor update frequency (steps) — same for all
+# Note: VeredKFAC requires batch_size × KFAC_FREQ >= max(n_in) across layers.
+# For this MLP, max n_in = 784 (fc1) + 1 bias col = 785.
+# 64 × 20 = 1280 >= 785  ✓   (64 × 10 = 640 < 785 → VeredKFAC skips fc1)
+LR_ADAM           = 1e-3
+LR_KFAC           = 1e-2    # same lr for all three K-FAC methods
+KFAC_DAMPING      = 5e-3    # same damping for all three K-FAC methods
+KFAC_MOMENTUM     = 0.0     # same momentum for all three K-FAC methods
+KFAC_CLIP         = 10.0    # same gradient clip for all three K-FAC methods
+RESULTS_DIR       = ROOT / "benchmark" / "results"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
@@ -230,6 +246,8 @@ def train_one_config(name: str, make_opt_fn, train_loader, val_loader) -> dict:
     return history
 
 # ── Optimizer factories ───────────────────────────────────────────────────────
+# All three K-FAC factories use identical hyperparameters.
+# The only difference is the algorithm each implements.
 
 def make_adam(model):
     return torch.optim.Adam(model.parameters(), lr=LR_ADAM)
@@ -238,50 +256,39 @@ def make_sgd(model):
     return torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 
 def make_classic_kfac(model):
+    """Gram matrix XᵀX → LU inversion.  Error ∝ κ(X)⁴."""
     return ClassicKFAC(
         model,
         lr=LR_KFAC,
-        damping=5e-3,           # lower damping → more faithful natural gradient
+        damping=KFAC_DAMPING,
         factor_update_freq=KFAC_FREQ,
         decomp_update_freq=KFAC_FREQ,
-        momentum=0.0,
+        momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
     )
 
-def make_olssm_adaptive(model):
+def make_olssm_kfac(model):
+    """Gram matrix XᵀX → Cholesky factorisation.  Error ∝ κ(X)²."""
     return OlsSMKFAC(
         model,
         lr=LR_KFAC,
-        damping=5e-3,
+        damping=KFAC_DAMPING,
         factor_update_freq=KFAC_FREQ,
         decomp_update_freq=KFAC_FREQ,
-        adaptive=True,
-        adaptive_min_n=128,
-        adaptive_rank_budget=128,  # B=64 → rank up to 64; 128 covers it fully
-        momentum=0.0,
+        momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
-    )
-
-def make_olssm_rank32(model):
-    return OlsSMKFAC(
-        model,
-        lr=LR_KFAC,
-        damping=DAMPING,
-        factor_update_freq=KFAC_FREQ,
-        decomp_update_freq=KFAC_FREQ,
-        rank=32,
-        randomized=True,
-        momentum=0.0,
-        grad_clip=KFAC_CLIP,
+        # No rank reduction, no adaptive approximation — full Cholesky
+        # so we isolate the algorithm difference from any low-rank effect.
     )
 
 def make_vered_kfac(model):
+    """QR on raw activations X directly.  Error ∝ κ(X)¹."""
     return VeredKFAC(
         model,
         lr=LR_KFAC,
-        damping=5e-3,
+        damping=KFAC_DAMPING,
         factor_update_freq=KFAC_FREQ,
-        momentum=0.0,
+        momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
     )
 
@@ -296,114 +303,204 @@ def plot_results(all_results, results_dir):
         print("matplotlib not available — skipping plots")
         return
 
+    # Color scheme: K-FAC trio uses a consistent ramp; baselines are muted
     colors = {
-        "Adam":               "#2196F3",
-        "SGD+momentum":       "#9E9E9E",
-        "ClassicKFAC":        "#F44336",
-        "OlsSMKFAC-adaptive": "#4CAF50",
-        "OlsSMKFAC-rank32":   "#FF9800",
-        "VeredKFAC":          "#9C27B0",
+        "ClassicKFAC":  "#F44336",   # red   — forms Gram + LU inversion
+        "OlsSMKFAC":    "#FF9800",   # orange — forms Gram + Cholesky
+        "VeredKFAC":    "#9C27B0",   # purple — QR on raw activations
+        "Adam":         "#2196F3",   # blue  — first-order baseline
+        "SGD+momentum": "#9E9E9E",   # gray  — first-order baseline
     }
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle("Optimizer Comparison — MNIST MLP (784→512→256→128→10)", fontsize=13)
+    linestyles = {
+        "ClassicKFAC":  "-",
+        "OlsSMKFAC":    "--",
+        "VeredKFAC":    "-.",
+        "Adam":         ":",
+        "SGD+momentum": ":",
+    }
+    # ── Full comparison (all optimizers) ─────────────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(
+        "K-FAC comparison — MNIST MLP (784→512→256→128→10)\n"
+        "lr={:.0e}  damping={:.0e}  update_freq={}  batch={}".format(
+            LR_KFAC, KFAC_DAMPING, KFAC_FREQ, BATCH_SIZE),
+        fontsize=11,
+    )
 
     for res in all_results:
         name  = res["name"]
         color = colors.get(name, "#333333")
-        steps = res["step"]
-        times = res["wall_time"]
-        loss  = res["train_loss"]
-        vacc  = res["val_acc"]
+        ls    = linestyles.get(name, "-")
+        lw    = 2.5 if name in KFAC_NAMES else 1.5
+        axes[0].plot(res["step"],      res["train_loss"], label=name,
+                     color=color, linestyle=ls, linewidth=lw)
+        axes[1].plot(res["step"],      res["val_acc"],    label=name,
+                     color=color, linestyle=ls, linewidth=lw)
 
-        axes[0].plot(steps, loss, label=name, color=color, linewidth=2)
-        axes[1].plot(times, vacc, label=name, color=color, linewidth=2)
-        axes[2].plot(steps, vacc, label=name, color=color, linewidth=2)
-
-    for ax, xlabel, ylabel, title in [
-        (axes[0], "Steps",       "Train loss",      "Loss vs Steps"),
-        (axes[1], "Wall time (s)","Val accuracy",   "Accuracy vs Wall Time"),
-        (axes[2], "Steps",       "Val accuracy",    "Accuracy vs Steps"),
+    for ax, ylabel, title in [
+        (axes[0], "Train loss",   "Loss vs Steps"),
+        (axes[1], "Val accuracy", "Accuracy vs Steps"),
     ]:
-        ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title)
+        ax.set_xlabel("Steps"); ax.set_ylabel(ylabel); ax.set_title(title)
         ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     path = results_dir / "training_comparison.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
-    print(f"\nPlot saved: {path}")
+    print(f"Plot saved: {path}")
     plt.close()
+
+    # ── K-FAC-only close-up ───────────────────────────────────────────────────
+    kfac_results = [r for r in all_results if r["name"] in KFAC_NAMES]
+    if len(kfac_results) >= 2:
+        fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5))
+        fig2.suptitle(
+            "K-FAC algorithm comparison (same lr / damping / update-freq)\n"
+            "ClassicKFAC: κ⁴ error  |  OlsSMKFAC: κ² error  |  VeredKFAC: κ¹ error",
+            fontsize=11,
+        )
+
+        for res in kfac_results:
+            name  = res["name"]
+            color = colors[name]
+            ls    = linestyles[name]
+            axes2[0].plot(res["step"],      res["train_loss"], label=name,
+                          color=color, linestyle=ls, linewidth=2.5)
+            axes2[1].plot(res["wall_time"], res["val_acc"],    label=name,
+                          color=color, linestyle=ls, linewidth=2.5)
+            axes2[2].plot(res["step"],      res["val_acc"],    label=name,
+                          color=color, linestyle=ls, linewidth=2.5)
+
+        for ax, xlabel, ylabel, title in [
+            (axes2[0], "Steps",        "Train loss",    "Loss vs Steps"),
+            (axes2[1], "Wall time (s)","Val accuracy",  "Accuracy vs Wall Time"),
+            (axes2[2], "Steps",        "Val accuracy",  "Accuracy vs Steps"),
+        ]:
+            ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title)
+            ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        path2 = results_dir / "kfac_comparison.png"
+        fig2.savefig(path2, dpi=150, bbox_inches="tight")
+        print(f"Plot saved: {path2}")
+        plt.close()
 
 # ── Summary table ─────────────────────────────────────────────────────────────
 
-def print_summary(all_results):
-    print("\n" + "=" * 80)
-    print("SUMMARY")
-    print("=" * 80)
-    print(f"  {'Optimizer':>24}  {'lr_init':>8}  {'lr_final':>8}  "
-          f"{'Steps→target':>12}  {'Time→target':>12}  "
-          f"{'Final val acc':>14}  {'Opt ms/step':>11}")
-    print(f"  {'-'*90}")
+KFAC_NAMES = {"ClassicKFAC", "OlsSMKFAC", "VeredKFAC"}
 
-    adam_time = next(
-        (r["time_to_target"] for r in all_results if r["name"] == "Adam"), None)
+
+def print_summary(all_results):
+    """Print per-optimizer metrics then a K-FAC cross-comparison table."""
+
+    # ── Per-optimizer metrics ─────────────────────────────────────────────────
+    print("\n" + "=" * 88)
+    print("RESULTS")
+    print("=" * 88)
+    print(f"  {'Optimizer':>16}  {'damping':>8}  {'Steps→98%':>10}  "
+          f"{'Time→98%':>10}  {'Final val':>10}  {'Opt ms/step':>12}")
+    print(f"  {'-'*82}")
 
     for res in all_results:
-        s  = res.get("steps_to_target")
-        t  = res.get("time_to_target")
-        v  = res.get("final_val_acc")
-        o  = res.get("avg_opt_overhead_ms")
-        li = res.get("lr_init")
-        lf = res.get("lr_final")
+        s = res.get("steps_to_target")
+        t = res.get("time_to_target")
+        v = res.get("final_val_acc")
+        o = res.get("avg_opt_overhead_ms")
 
-        s_str  = f"{s}" if s else ">500"
-        t_str  = f"{t:.1f}s" if t else "—"
-        v_str  = f"{v:.4f}" if v else "—"
-        o_str  = f"{o:.1f}" if o else "—"
-        li_str = f"{li:.2e}" if li is not None else "—"
-        lf_str = f"{lf:.2e}" if lf is not None else "—"
+        s_str = f"{s}"    if s else f">{MAX_STEPS}"
+        t_str = f"{t:.1f}s" if t else "—"
+        v_str = f"{v:.4f}" if v is not None else "—"
+        o_str = f"{o:.2f}" if o is not None else "—"
 
-        # Speedup vs Adam
-        if t and adam_time:
-            ratio = adam_time / t
-            ratio_str = f" ({ratio:.2f}× vs Adam)"
-        else:
-            ratio_str = ""
+        # show damping for K-FAC methods, "—" for first-order
+        d_str = f"{KFAC_DAMPING:.0e}" if res["name"] in KFAC_NAMES else "—"
 
-        print(f"  {res['name']:>24}  {li_str:>8}  {lf_str:>8}  "
-              f"{s_str:>12}  {t_str + ratio_str:>25}  "
-              f"{v_str:>14}  {o_str:>11}")
+        print(f"  {res['name']:>16}  {d_str:>8}  {s_str:>10}  "
+              f"{t_str:>10}  {v_str:>10}  {o_str:>12}")
+
+    # ── K-FAC cross-comparison ────────────────────────────────────────────────
+    kfac = {r["name"]: r for r in all_results if r["name"] in KFAC_NAMES}
+    if len(kfac) < 2:
+        return
 
     print()
+    print("  K-FAC algorithm comparison  (same lr / damping / update-freq / model init)")
+    print(f"  {'-'*82}")
 
-    # Explain convergence ratio if K-FAC reached target
-    adam_steps = next(
-        (r["steps_to_target"] for r in all_results if r["name"] == "Adam"), None)
-    for res in all_results:
-        if "KFAC" in res["name"] and res.get("steps_to_target") and adam_steps:
-            ratio = adam_steps / res["steps_to_target"]
-            print(f"  {res['name']} converged in {ratio:.1f}× fewer steps than Adam")
+    # Use ClassicKFAC as the reference baseline for cross-ratios
+    ref_name = "ClassicKFAC"
+    ref = kfac.get(ref_name)
+
+    header = f"  {'Method':>16}  {'Error scaling':>14}  {'Steps→98%':>10}  {'vs Classic':>10}  {'Opt ms/step':>12}"
+    print(header)
+    print(f"  {'-'*70}")
+
+    error_scaling = {
+        "ClassicKFAC": "κ(X)⁴ · ε",
+        "OlsSMKFAC":   "κ(X)² · ε",
+        "VeredKFAC":   "κ(X)¹ · ε",
+    }
+
+    for name in ["ClassicKFAC", "OlsSMKFAC", "VeredKFAC"]:
+        res = kfac.get(name)
+        if res is None:
+            continue
+        s = res.get("steps_to_target")
+        o = res.get("avg_opt_overhead_ms")
+        s_str = f"{s}" if s else f">{MAX_STEPS}"
+        o_str = f"{o:.2f}" if o is not None else "—"
+        scaling = error_scaling.get(name, "")
+
+        if ref and ref.get("steps_to_target") and s:
+            ratio = ref["steps_to_target"] / s
+            ratio_str = f"{ratio:.2f}×"
+        elif name == ref_name:
+            ratio_str = "baseline"
+        else:
+            ratio_str = "—"
+
+        print(f"  {name:>16}  {scaling:>14}  {s_str:>10}  {ratio_str:>10}  {o_str:>12}")
+
+    print()
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Optimizer benchmark: Adam / SGD / ClassicKFAC / OlsSMKFAC / VeredKFAC"
+        description=(
+            "K-FAC algorithm comparison: ClassicKFAC vs OlsSMKFAC vs VeredKFAC.\n"
+            "All three run with identical lr / damping / update-freq on the same model.\n"
+            "Adam is included as a first-order baseline."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging verbosity.  Use DEBUG to trace every math call in the optimizer. "
-             "Default: INFO.",
+        help="Logging verbosity. DEBUG traces every math call. Default: INFO.",
+    )
+    parser.add_argument(
+        "--include-sgd",
+        action="store_true",
+        help="Also run SGD+momentum as a second first-order baseline.",
     )
     parser.add_argument(
         "--optimizers",
         nargs="+",
         default=None,
         metavar="NAME",
-        help="Run only the named optimizers (e.g. --optimizers Adam VeredKFAC). "
-             "Default: all.",
+        help=(
+            "Run only specific optimizers by name. "
+            "Available: ClassicKFAC OlsSMKFAC VeredKFAC Adam SGD+momentum. "
+            "Default: ClassicKFAC OlsSMKFAC VeredKFAC Adam."
+        ),
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=MAX_STEPS,
+        help=f"Maximum training steps per optimizer. Default: {MAX_STEPS}.",
     )
     return parser.parse_args()
 
@@ -411,33 +508,41 @@ def _parse_args():
 def main():
     args = _parse_args()
 
-    # ── Logging setup ─────────────────────────────────────────────────────────
+    # Allow --steps to override the module-level constant
+    global MAX_STEPS
+    MAX_STEPS = args.steps
+
+    # ── Logging ───────────────────────────────────────────────────────────────
     log_level = getattr(logging, args.log_level.upper())
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s  %(name)-35s  %(levelname)-8s  %(message)s",
         datefmt="%H:%M:%S",
     )
-    # Suppress verbose third-party noise even in DEBUG mode
     for noisy in ("PIL", "matplotlib", "torch"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-
     if log_level == logging.DEBUG:
-        print(f"[benchmark] DEBUG logging enabled — optimizer math will be traced.")
+        print("[benchmark] DEBUG logging active — optimizer math will be traced.")
+
+    # ── Print run configuration ───────────────────────────────────────────────
+    print(f"\nK-FAC comparison  |  lr={LR_KFAC:.0e}  damping={KFAC_DAMPING:.0e}"
+          f"  update_freq={KFAC_FREQ}  batch={BATCH_SIZE}  max_steps={MAX_STEPS}")
+    print(f"Device: {DEVICE}\n")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     train_loader, val_loader = get_loaders()
 
+    # ── Default run order: K-FAC trio first, then Adam baseline ───────────────
     all_configs = [
-        ("OlsSMKFAC-adaptive",   make_olssm_adaptive),
-        ("OlsSMKFAC-rank32",     make_olssm_rank32),
-        ("ClassicKFAC",          make_classic_kfac),
-        ("VeredKFAC",            make_vered_kfac),
-        ("Adam",                 make_adam),
-        ("SGD+momentum",         make_sgd),
+        ("ClassicKFAC",  make_classic_kfac),   # κ⁴ — Gram + LU
+        ("OlsSMKFAC",    make_olssm_kfac),     # κ² — Gram + Cholesky
+        ("VeredKFAC",    make_vered_kfac),     # κ¹ — QR on raw X
+        ("Adam",         make_adam),            # first-order baseline
+        ("SGD+momentum", make_sgd),            # first-order baseline
     ]
 
     if args.optimizers:
+        # User explicitly selected a subset
         requested = set(args.optimizers)
         configs = [(n, f) for n, f in all_configs if n in requested]
         missing = requested - {n for n, _ in configs}
@@ -445,15 +550,20 @@ def main():
             print(f"[benchmark] WARNING: unknown optimizer(s): {missing}")
             print(f"[benchmark] Available: {[n for n, _ in all_configs]}")
     else:
-        configs = all_configs
+        # Default: K-FAC trio + Adam; optionally add SGD
+        default_names = {"ClassicKFAC", "OlsSMKFAC", "VeredKFAC", "Adam"}
+        if args.include_sgd:
+            default_names.add("SGD+momentum")
+        configs = [(n, f) for n, f in all_configs if n in default_names]
 
+    # ── Run ───────────────────────────────────────────────────────────────────
     all_results = []
     for name, factory in configs:
-        torch.manual_seed(SEED)   # same init for every optimizer
+        torch.manual_seed(SEED)   # identical model init for every optimizer
         result = train_one_config(name, factory, train_loader, val_loader)
         all_results.append(result)
 
-    # Save JSON
+    # ── Save & report ─────────────────────────────────────────────────────────
     json_path = RESULTS_DIR / "training_results.json"
     with open(json_path, "w") as f:
         json.dump(all_results, f, indent=2)
