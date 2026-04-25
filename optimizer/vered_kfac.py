@@ -109,8 +109,11 @@ class VeredKFAC(torch.optim.Optimizer):
         Skip layers whose output dimension exceeds this value (e.g. LM head).
         0 = disabled.  Default: 0.
     augment_bias : bool
-        If True (default), append a ones column to input activations for
-        layers with bias so the bias term is folded into the A factor.
+        If True, append a ones column to input activations for layers with
+        bias so the bias term is folded into the A factor.  Default: False.
+        Leave False to match ClassicKFAC's bias handling (apply_vered_bias
+        with only the G factor, treating A=1 for the bias), which avoids
+        the centred-covariance contamination that augmentation introduces.
     """
 
     def __init__(
@@ -124,7 +127,7 @@ class VeredKFAC(torch.optim.Optimizer):
         grad_clip: Optional[float] = None,
         gamma: float = 0.0,
         max_out_dim: int = 0,
-        augment_bias: bool = True,
+        augment_bias: bool = False,
     ):
         logger.debug(
             "VeredKFAC init: factor_update_freq=%d  damping=%.2e  augment_bias=%s",
@@ -318,21 +321,13 @@ class VeredKFAC(torch.optim.Optimizer):
         weight.data.add_(nat_grad_w, alpha=-lr)
 
         # ---- Bias gradient ----
+        # Matches ClassicKFAC: apply only the G factor (treat A=1 for bias).
+        # nat_grad_b = G⁻¹ · grad_b = (R_Gᵀ R_G)⁻¹ · grad_b
         if module.bias is not None and module.bias.grad is not None:
             grad_b = module.bias.grad
             if weight_decay > 0:
                 grad_b = grad_b.add(module.bias.data, alpha=weight_decay)
-
-            if self.augment_bias:
-                # When bias is augmented, the last row/col of R_X encodes the bias
-                # factor.  Extract the scalar R_bb = R_X[-1, -1].
-                # Bias natural gradient: G⁻¹ grad_b · (1/R_bb²)
-                R_bb = R_X[-1, -1]
-                nat_grad_b = apply_vered_bias(grad_b, R_G)
-                nat_grad_b = nat_grad_b / (R_bb ** 2 + 1e-12)
-            else:
-                nat_grad_b = apply_vered_bias(grad_b, R_G)
-
+            nat_grad_b = apply_vered_bias(grad_b, R_G)
             module.bias.data.add_(nat_grad_b, alpha=-lr)
 
     # ------------------------------------------------------------------

@@ -44,6 +44,7 @@ bias Kronecker factor is handled implicitly.  Disabled by augment_bias=False.
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from typing import Dict, List, Optional, Tuple
 
@@ -100,7 +101,8 @@ class RawActivationHooks(GramMatrixEstimator):
     augment_bias : bool
         If True, append a column of ones to input activations for layers with
         bias, so the bias Kronecker factor is handled implicitly.
-        Default: True.
+        Default: False — matches ClassicKFAC's bias handling and avoids the
+        centred-covariance contamination the augmentation introduces.
     """
 
     def __init__(
@@ -108,7 +110,7 @@ class RawActivationHooks(GramMatrixEstimator):
         model: nn.Module,
         damping: float = 1e-2,
         max_out_dim: int = 0,
-        augment_bias: bool = True,
+        augment_bias: bool = False,
     ):
         self.model = model
         self.damping = damping
@@ -221,8 +223,16 @@ class RawActivationHooks(GramMatrixEstimator):
                 tuple(R_X_raw.shape), tuple(R_G_raw.shape), self.damping,
             )
 
-            R_X = finalize_R(R_X_raw, self.damping)
-            R_G = finalize_R(R_G_raw, self.damping)
+            # BUG FIX: normalize by sqrt(n_rows) so that RᵀR ≈ XᵀX/n (per-sample
+            # mean), matching ClassicKFAC which divides A_sum by n_rows in
+            # get_factors().  Without this, RᵀR = XᵀX (sum), making the
+            # preconditioner n_rows times too small and the effective lr ~1280×
+            # too small for typical KFAC_FREQ=20, batch=64 settings.
+            R_X_scaled = R_X_raw / math.sqrt(rows_X)
+            R_G_scaled = R_G_raw / math.sqrt(rows_G)
+
+            R_X = finalize_R(R_X_scaled, self.damping)
+            R_G = finalize_R(R_G_scaled, self.damping)
 
             logger.debug(
                 "get_factors() [%s]: done → R_X=%s  R_G=%s",
