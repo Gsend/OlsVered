@@ -71,8 +71,8 @@ class ClassicKFAC(torch.optim.Optimizer):
                         momentum=momentum)
         params = []
         for module in model.modules():
-            if isinstance(module, nn.Linear):
-                params.append({"params": module.parameters()})
+            if isinstance(module, (nn.Linear, nn.Conv2d)):
+                params.append({"params": list(module.parameters())})
         super().__init__(params, defaults)
 
         self.model = model
@@ -165,12 +165,15 @@ class ClassicKFAC(torch.optim.Optimizer):
                     if p.grad is None:
                         continue
                     grad = p.grad
+                    lr = wd = mom = None
                     for group in self.param_groups:
                         if any(p is pp for pp in group["params"]):
                             wd = group["weight_decay"]
                             lr = group["lr"]
                             mom = group["momentum"]
                             break
+                    if lr is None:
+                        continue   # param not in any group — skip
                     if wd > 0:
                         grad = p.grad.add(p.data, alpha=wd)
                     p.data.add_(grad, alpha=-lr)
@@ -178,12 +181,16 @@ class ClassicKFAC(torch.optim.Optimizer):
 
             A_inv, G_inv = self._inverses[module]
 
+            lr = wd = mom = None
             for group in self.param_groups:
                 if any(p is module.weight for p in group["params"]):
                     lr = group["lr"]
                     wd = group["weight_decay"]
                     mom = group["momentum"]
                     break
+
+            if lr is None:
+                continue   # module not in any param group — skip
 
             # --- Weight update ---
             if module.weight.grad is not None:
