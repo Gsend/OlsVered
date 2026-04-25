@@ -19,7 +19,7 @@ Transformer / sequence model support (KFAC-Reduce for Linear layers):
   For a transformer's nn.Linear layer the input is (B, seq_len, d_in).
   Naively flattening to (B·seq_len, d_in) inflates the outer-product cost
   by seq_len (128× for BERT) — this is why opt_ms was ~1 500 ms/step
-  regardless of inv_update_freq, since the hooks ran every step.
+  regardless of decomp_update_freq, since the hooks ran every step.
 
   Fix: randomly subsample at most KFACHooks._SEQ_SUBSAMPLE rows from the
   flattened (B·seq_len, d) tensor before computing the outer product.  This

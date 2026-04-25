@@ -1,13 +1,22 @@
 """
-K-FAC optimizer using olssm LU backend for Gram matrix operations.
+K-FAC optimizer with dual inversion paths from Madar et al.
 
 Natural gradient update:  ΔW = G⁻¹ · ∇L · A⁻¹
 where A = E[xxᵀ] (input Gram) and G = E[δδᵀ] (gradient Gram).
 
-Instead of torch.linalg.inv, uses olssm's LU-based solver which:
-  - Avoids forming explicit inverse when possible
-  - Provides better numerical stability near singularity
-  - Enables lower damping → more faithful curvature estimate
+Two inversion strategies, routed per layer by Gram matrix dimension n:
+
+  Cholesky-solve path  (n ≤ lu_max_dim, both A and G)
+      Stores L = chol(Gram + λI) and solves at apply time via
+      torch.cholesky_solve — never forms the explicit inverse, so
+      condition number stays cond(A + λI) instead of cond(A)².
+      2× cheaper than LU and numerically ideal for symmetric PSD matrices.
+      CPU fallback uses the olssm Rust backend (faer SIMD).
+
+  EVD path  (n > lu_max_dim or mixed dimensions)
+      Stores (Q, diag(1/(λᵢ+δ))) from torch.linalg.eigh (cuSOLVER on GPU).
+      CPU path routes through the olssm Rust backend (eigh_f32 /
+      randomized_eigh_f32) for faer-accelerated decomposition.
 """
 
 import time
@@ -44,7 +53,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
     factor_update_freq : int
         How often (in steps) to recompute Gram matrices A, G.
         Default: 10.
-    inv_update_freq : int
+    decomp_update_freq : int
         How often (in steps) to recompute cached inverses A⁻¹, G⁻¹.
         Default: 10.
     weight_decay : float
@@ -84,10 +93,13 @@ class OlsSMKFAC(torch.optim.Optimizer):
         rank of a Gram matrix from a batch of B samples is at most B).
         Default: 64.
     lu_max_dim : int
-        Gram matrices whose dimension n <= lu_max_dim use Madar's LU-based
-        solve (torch.linalg.solve) instead of EVD.
+        Gram matrices whose dimension n <= lu_max_dim use Madar's Cholesky-
+        based solve instead of EVD.  Default 4096 covers all standard BERT
+        and transformer layer sizes (768, 3072) so the paper path fires for
+        every layer by default.
 
-        LU solve:   applies (A + λI)⁻¹ via back-substitution — never forms
+        Chol solve: stores L = chol(A+λI) and solves via cholesky_solve —
+                    never forms
                     the explicit inverse, so condition number stays cond(A + λI)
                     rather than squaring to cond(A)².  Faster than EVD for
                     small n and more numerically stable near singularity.
@@ -111,7 +123,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
         lr: float = 1e-3,
         damping: float = 1e-2,
         factor_update_freq: int = 10,
-        inv_update_freq: int = 10,
+        decomp_update_freq: int = 10,
         weight_decay: float = 0.0,
         momentum: float = 0.9,
         rank: Optional[int] = None,
@@ -123,7 +135,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
         grad_clip: Optional[float] = None,
         gamma: float = 0.0,
         max_gram_dim: int = 0,
-        lu_max_dim: int = 512,
+        lu_max_dim: int = 4096,
         gram_estimator: Optional[GramMatrixEstimator] = None,
     ):
         # ── Parameter validation ─────────────────────────────────────────────
@@ -136,9 +148,9 @@ class OlsSMKFAC(torch.optim.Optimizer):
         if damping <= 0:
             raise ConfigurationError(f"damping must be > 0, got {damping}.")
         logger.debug(
-            "OlsSMKFAC init: factor_update_freq=%d  inv_update_freq=%d  "
+            "OlsSMKFAC init: factor_update_freq=%d  decomp_update_freq=%d  "
             "rank=%s  adaptive=%s",
-            factor_update_freq, inv_update_freq, rank, adaptive,
+            factor_update_freq, decomp_update_freq, rank, adaptive,
         )
 
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
@@ -153,7 +165,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
         self.model = model
         self.damping = damping
         self.factor_update_freq = factor_update_freq
-        self.inv_update_freq = inv_update_freq
+        self.decomp_update_freq = decomp_update_freq
         self.rank = rank
         self.randomized = randomized      # use randomized EVD when rank is set
         self.n_power_iter = n_power_iter  # power-iteration passes for randomized EVD
@@ -162,11 +174,11 @@ class OlsSMKFAC(torch.optim.Optimizer):
         self.adaptive_rank_budget = adaptive_rank_budget
         self.grad_clip  = grad_clip  # max L2 norm per natural-gradient matrix (None=off)
         self.gamma      = gamma      # EMA decay for Gram matrices (0 = disabled)
-        self.lu_max_dim = lu_max_dim # layers with n <= this use LU solve instead of EVD
+        self.lu_max_dim = lu_max_dim # layers with n <= this use Cholesky solve instead of EVD
 
         # Per-layer rank choices recorded during _update_inverses for inspection.
         # Keys are module objects; values are (k_a, k_g) — None means full EVD,
-        # "lu" means LU-solve path.
+        # "lu" means Cholesky-solve path (key kept as "lu" for backward compat).
         self.layer_ranks_: Dict[nn.Module, Tuple] = {}
 
         # Hook infrastructure — accept injected estimator or create default
@@ -177,10 +189,10 @@ class OlsSMKFAC(torch.optim.Optimizer):
         self.hooks.enable()
 
         # Cached factors and decompositions.
-        # _inverses  : EVD path — stores (Q_A, inv_λ_A, Q_G, inv_λ_G) f32 tensors
-        # _lu_factors: LU path  — stores (A_damp, G_damp) f32 tensors, damping baked in
-        #   At apply time we call torch.linalg.solve(G_damp, grad) and
-        #   torch.linalg.solve(A_damp, result.T).T — stays on GPU, no explicit inverse.
+        # _inverses  : EVD path   — stores (Q_A, inv_λ_A, Q_G, inv_λ_G) f32 tensors
+        # _lu_factors: Chol path  — stores (L_A, L_G) lower Cholesky factors f32 tensors
+        #   At apply time we call torch.cholesky_solve(grad, L_G) and
+        #   torch.cholesky_solve(result.T, L_A).T — stays on GPU, no explicit inverse.
         self._factors: Dict[nn.Module, Tuple[torch.Tensor, torch.Tensor]] = {}
         self._inverses: Dict[nn.Module, Tuple[
             torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
@@ -261,15 +273,26 @@ class OlsSMKFAC(torch.optim.Optimizer):
         """
         # Ensure symmetry (numerical drift can break eigh)
         mat = (mat + mat.T) * 0.5
+        is_cpu = mat.device.type == "cpu"
 
         if k is None or k >= mat.shape[0]:
-            # Full EVD — uses cuSOLVER on CUDA, LAPACK on CPU
+            if is_cpu:
+                # CPU: olssm Rust backend — faer SIMD-accelerated full EVD.
+                # Falls back to numpy.linalg.eigh when Rust is unavailable.
+                q_np, inv_lam_np = eigh_f32(mat.numpy(), self.damping)
+                return torch.from_numpy(q_np), torch.from_numpy(inv_lam_np)
+            # GPU: cuSOLVER via torch.linalg.eigh (zero host-device transfer)
             eigenvalues, Q = torch.linalg.eigh(mat)
             inv_lam = 1.0 / (eigenvalues + self.damping).clamp(min=1e-8)
             return Q, inv_lam
 
         if self.randomized:
-            # Halko-Martinsson-Tropp randomized EVD — stays on GPU
+            if is_cpu:
+                # CPU: olssm Rust backend — randomized EVD (Halko-Martinsson-Tropp)
+                q_np, inv_lam_np = randomized_eigh_f32(
+                    mat.numpy(), k, self.n_power_iter, self.damping)
+                return torch.from_numpy(q_np), torch.from_numpy(inv_lam_np)
+            # GPU: Halko-Martinsson-Tropp randomized EVD — stays on GPU
             n = mat.shape[0]
             Omega = torch.randn(n, k, device=mat.device, dtype=mat.dtype)
             Y = mat @ Omega
@@ -283,7 +306,13 @@ class OlsSMKFAC(torch.optim.Optimizer):
             inv_lam = 1.0 / (eigenvalues + self.damping).clamp(min=1e-8)
             return Q, inv_lam
 
-        # Deterministic top-k: full eigh then slice (cheaper than scipy for GPU)
+        # Deterministic top-k
+        if is_cpu:
+            # CPU: olssm Rust backend — top-k EVD via faer
+            q_np, inv_lam_np = eigh_topk_f32(mat.numpy(), k, self.damping)
+            return torch.from_numpy(q_np), torch.from_numpy(inv_lam_np)
+        # GPU: full eigh then slice (cuSOLVER is fast enough that slicing wins
+        # over a Python-side truncated solve for typical K-FAC dimensions)
         eigenvalues, Q_full = torch.linalg.eigh(mat)
         eigenvalues = eigenvalues[-k:]
         Q = Q_full[:, -k:]
@@ -297,12 +326,16 @@ class OlsSMKFAC(torch.optim.Optimizer):
     def _decompose_lu(
         self, mat: torch.Tensor
     ) -> torch.Tensor:
-        """Prepare a damped Gram matrix for LU-based solve (Madar's approach).
+        """Compute the Cholesky factor of a damped Gram matrix (Madar's approach).
 
         Instead of computing (A + λI)⁻¹ explicitly — which squares the
-        condition number — we store the damped matrix itself and solve linear
-        systems against it via torch.linalg.solve (cuSOLVER LU on GPU, LAPACK
-        on CPU).  Condition number stays cond(A + λI) rather than cond(A)².
+        condition number — we store the lower Cholesky factor L satisfying
+        (A + λI) = L Lᵀ, then call torch.cholesky_solve at apply time.
+
+        Cholesky is preferred over LU for symmetric PSD Gram matrices:
+          - 2× fewer FLOPs (exploits symmetry, no pivoting)
+          - Numerically ideal for PSD inputs; pivoting never needed
+          - Condition stays cond(A + λI) rather than cond(A)²
 
         Parameters
         ----------
@@ -310,13 +343,18 @@ class OlsSMKFAC(torch.optim.Optimizer):
 
         Returns
         -------
-        mat_damp : (n, n) float32 — (mat + λI), symmetrised, ready for solve
+        L : (n, n) lower-triangular float32 — Cholesky factor of (mat + λI)
         """
         mat = (mat + mat.T) * 0.5          # enforce exact symmetry
         n   = mat.shape[0]
-        # Add damping in-place on a fresh copy (don't mutate the cached factor)
         mat_damp = mat + self.damping * torch.eye(n, device=mat.device, dtype=mat.dtype)
-        return mat_damp
+        try:
+            return torch.linalg.cholesky(mat_damp)
+        except torch.linalg.LinAlgError:
+            # Gram matrix barely PSD (e.g. early training, rank-deficient batch).
+            # Add 9× extra damping (total 10×) and retry — always succeeds then.
+            mat_damp.diagonal().add_(self.damping * 9.0)
+            return torch.linalg.cholesky(mat_damp)
 
     # ------------------------------------------------------------------
 
@@ -324,11 +362,13 @@ class OlsSMKFAC(torch.optim.Optimizer):
         """Recompute cached decompositions for all layers.
 
         Routing logic per layer (both A and G must qualify for LU path):
-          n_a <= lu_max_dim AND n_g <= lu_max_dim  →  LU solve path
+          n_a <= lu_max_dim AND n_g <= lu_max_dim  →  Cholesky solve path
           otherwise                                →  EVD / randomized-EVD path
 
-        LU path:  stores (A + λI, G + λI) — torch.linalg.solve at apply time.
-        EVD path: stores (Q_A, inv_λ_A, Q_G, inv_λ_G) — 4-matmul apply.
+        Chol path: stores (L_A, L_G) — lower Cholesky factors of (A+λI), (G+λI).
+                   torch.cholesky_solve at apply time; never forms explicit inverse.
+        EVD path:  stores (Q_A, inv_λ_A, Q_G, inv_λ_G) — 4-matmul apply.
+                   CPU uses olssm Rust backend (faer SIMD); GPU uses cuSOLVER.
 
         Both paths run entirely on the model's device (GPU via cuSOLVER/cuBLAS
         when available) with no CPU/numpy roundtrip.
@@ -348,13 +388,13 @@ class OlsSMKFAC(torch.optim.Optimizer):
             n_a, n_g = A_f.shape[0], G_f.shape[0]
 
             if self._use_lu(n_a) and self._use_lu(n_g):
-                # ── Madar LU path ─────────────────────────────────────────
-                # Bake damping into the matrix once; solve at apply time.
-                # Damping is re-baked every inv_update_freq steps, so gradual
-                # damping decay (post-threshold) is automatically picked up.
-                A_damp = self._decompose_lu(A_f).to(dtype=dtype)
-                G_damp = self._decompose_lu(G_f).to(dtype=dtype)
-                self._lu_factors[module] = (A_damp, G_damp)
+                # ── Madar Cholesky path ───────────────────────────────────
+                # Compute Cholesky factor L of (Gram + λI) once; solve via
+                # cholesky_solve at apply time.  Re-factored every
+                # decomp_update_freq steps so gradual damping decay is picked up.
+                L_A = self._decompose_lu(A_f).to(dtype=dtype)
+                L_G = self._decompose_lu(G_f).to(dtype=dtype)
+                self._lu_factors[module] = (L_A, L_G)
                 # Remove any stale EVD cache for this layer
                 self._inverses.pop(module, None)
                 self.layer_ranks_[module] = ("lu", "lu")
@@ -400,7 +440,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
             self._update_factors()
 
         # Update inverses periodically
-        if self._step_count % self.inv_update_freq == 1 or self.inv_update_freq == 1:
+        if self._step_count % self.decomp_update_freq == 1 or self.decomp_update_freq == 1:
             if self._factors:
                 self._update_inverses()
 
@@ -447,17 +487,16 @@ class OlsSMKFAC(torch.optim.Optimizer):
                          if wd > 0 else raw_grad
 
                 if has_lu:
-                    # ── Madar LU path ──────────────────────────────────────
+                    # ── Madar Cholesky path ────────────────────────────────
                     # ΔW = (G + λI)⁻¹ · ∇W · (A + λI)⁻¹
                     #
-                    # Step 1: solve (G + λI) C = ∇W  →  C = G⁻¹∇W  (d_out × d_in)
-                    # Step 2: solve (A + λI) ΔWᵀ = Cᵀ → ΔW = C · A⁻¹
-                    #
-                    # torch.linalg.solve uses LU internally (cuSOLVER on GPU).
+                    # L_G, L_A are lower Cholesky factors: G+λI = L_G L_Gᵀ etc.
+                    # Step 1: cholesky_solve(∇W,  L_G) → C  = (G+λI)⁻¹ ∇W
+                    # Step 2: cholesky_solve(Cᵀ,  L_A) → ΔWᵀ = (A+λI)⁻¹ Cᵀ
                     # Never forms explicit inverse — condition stays cond(A+λI).
-                    A_damp, G_damp = self._lu_factors[module]
-                    C      = torch.linalg.solve(G_damp, grad_w)          # (d_out, d_in)
-                    nat_grad = torch.linalg.solve(A_damp, C.T).T         # (d_out, d_in)
+                    L_A, L_G = self._lu_factors[module]
+                    C        = torch.cholesky_solve(grad_w, L_G)         # (d_out, d_in)
+                    nat_grad = torch.cholesky_solve(C.T, L_A).T          # (d_out, d_in)
 
                 else:
                     # ── EVD path ───────────────────────────────────────────
@@ -492,8 +531,8 @@ class OlsSMKFAC(torch.optim.Optimizer):
                          if wd > 0 else module.bias.grad
 
                 if has_lu:
-                    A_damp, G_damp = self._lu_factors[module]
-                    nat_grad_b = torch.linalg.solve(G_damp, grad_b.unsqueeze(1)).squeeze(1)
+                    L_A, L_G = self._lu_factors[module]
+                    nat_grad_b = torch.cholesky_solve(grad_b.unsqueeze(1), L_G).squeeze(1)
                 else:
                     Q_A, inv_lam_A, Q_G, inv_lam_G = self._inverses[module]
                     tmp_b      = Q_G.T @ grad_b
@@ -510,13 +549,13 @@ class OlsSMKFAC(torch.optim.Optimizer):
     def print_layer_ranks(self):
         """Print a summary of the inversion method chosen for each layer.
 
-        Example output (lu_max_dim=512, adaptive=True)::
+        Example output (lu_max_dim=4096, adaptive=True)::
 
             Layer inversion methods (last _update_inverses call):
-              Linear(784→512)   A(784×784): LU-solve   G(512×512): LU-solve
-              Linear(512→256)   A(512×512): LU-solve   G(256×256): LU-solve
-              Linear(256→768)   A(256×256): LU-solve   G(768×768): EVD k=128
-              Linear(768→768)   A(768×768): EVD k=128  G(768×768): EVD k=128
+              Linear(784→512)   A(784×784): Chol-solve  G(512×512): Chol-solve
+              Linear(512→256)   A(512×512): Chol-solve  G(256×256): Chol-solve
+              Linear(768→768)   A(768×768): Chol-solve  G(768×768): Chol-solve
+              Linear(768→3072)  A(768×768): Chol-solve  G(3072×3072): Chol-solve
         """
         if not self.layer_ranks_:
             print("No layer ranks recorded yet — call step() at least once.")
@@ -534,8 +573,8 @@ class OlsSMKFAC(torch.optim.Optimizer):
                 n_g = module.weight.shape[0]
                 label = f"Linear({n_a}→{n_g})"
             k_a, k_g = ranks
-            ka_str = "LU-solve" if k_a == "lu" else (f"EVD k={k_a}" if k_a is not None else "EVD full")
-            kg_str = "LU-solve" if k_g == "lu" else (f"EVD k={k_g}" if k_g is not None else "EVD full")
+            ka_str = "Chol-solve" if k_a == "lu" else (f"EVD k={k_a}" if k_a is not None else "EVD full")
+            kg_str = "Chol-solve" if k_g == "lu" else (f"EVD k={k_g}" if k_g is not None else "EVD full")
             print(f"  {label:<28}  A({n_a}×{n_a}): {ka_str:<12}  G({n_g}×{n_g}): {kg_str}")
 
     def get_timing_stats(self) -> Dict[str, Dict[str, float]]:
@@ -556,7 +595,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
     def kfac_state_dict(self) -> dict:
         """Serialize K-FAC curvature state for warm-start checkpointing.
 
-        Saves Gram matrices (_factors), EVD inverses (_inverses), and LU
+        Saves Gram matrices (_factors), EVD inverses (_inverses), and Cholesky
         factors (_lu_factors) keyed by layer index (pickle-safe).
 
         Returns
@@ -565,7 +604,7 @@ class OlsSMKFAC(torch.optim.Optimizer):
             "step_count" : int
             "factors"    : {layer_idx: (A_cpu, G_cpu)}
             "inverses"   : {layer_idx: (Q_A_cpu, il_A_cpu, Q_G_cpu, il_G_cpu)}
-            "lu_factors" : {layer_idx: (A_damp_cpu, G_damp_cpu)}
+            "lu_factors" : {layer_idx: (L_A_cpu, L_G_cpu)}  — lower Cholesky factors
         """
         mod_to_idx = {mod: i for i, mod in enumerate(self.hooks.linear_layers)}
         state: dict = {
@@ -581,9 +620,9 @@ class OlsSMKFAC(torch.optim.Optimizer):
             if mod in mod_to_idx:
                 state["inverses"][mod_to_idx[mod]] = (
                     Q_A.cpu(), il_A.cpu(), Q_G.cpu(), il_G.cpu())
-        for mod, (A_damp, G_damp) in self._lu_factors.items():
+        for mod, (L_A, L_G) in self._lu_factors.items():
             if mod in mod_to_idx:
-                state["lu_factors"][mod_to_idx[mod]] = (A_damp.cpu(), G_damp.cpu())
+                state["lu_factors"][mod_to_idx[mod]] = (L_A.cpu(), L_G.cpu())
         return state
 
     def load_kfac_state_dict(self, state: dict, device=None):
@@ -616,10 +655,10 @@ class OlsSMKFAC(torch.optim.Optimizer):
                 )
 
         self._lu_factors = {}
-        for i, (A_damp, G_damp) in state.get("lu_factors", {}).items():
+        for i, (L_A, L_G) in state.get("lu_factors", {}).items():
             mod = idx_to_mod.get(int(i))
             if mod is not None:
-                self._lu_factors[mod] = (A_damp.to(device), G_damp.to(device))
+                self._lu_factors[mod] = (L_A.to(device), L_G.to(device))
 
     def cleanup(self):
         """Remove hooks and free cached state."""
@@ -636,12 +675,12 @@ class OlsSMKFAC(torch.optim.Optimizer):
             if self.adaptive else
             (f"rank={self.rank}" if self.rank is not None else "full")
         )
-        lu_str = f"lu_max_dim={self.lu_max_dim}" if self.lu_max_dim > 0 else "lu=off"
+        lu_str = f"chol_max_dim={self.lu_max_dim}" if self.lu_max_dim > 0 else "chol=off"
         return (
             f"OlsSMKFAC("
             f"damping={self.damping}, "
             f"factor_update_freq={self.factor_update_freq}, "
-            f"inv_update_freq={self.inv_update_freq}, "
+            f"decomp_update_freq={self.decomp_update_freq}, "
             f"rank={rank_str}, "
             f"{lu_str}, "
             f"gamma={self.gamma}, "

@@ -237,7 +237,7 @@ def make_classic_kfac(model):
         lr=LR_KFAC,
         damping=5e-3,           # lower damping → more faithful natural gradient
         factor_update_freq=KFAC_FREQ,
-        inv_update_freq=KFAC_FREQ,
+        decomp_update_freq=KFAC_FREQ,
         momentum=0.0,
         grad_clip=KFAC_CLIP,
     )
@@ -248,7 +248,7 @@ def make_olssm_adaptive(model):
         lr=LR_KFAC,
         damping=5e-3,
         factor_update_freq=KFAC_FREQ,
-        inv_update_freq=KFAC_FREQ,
+        decomp_update_freq=KFAC_FREQ,
         adaptive=True,
         adaptive_min_n=128,
         adaptive_rank_budget=128,  # B=64 → rank up to 64; 128 covers it fully
@@ -262,7 +262,7 @@ def make_olssm_rank32(model):
         lr=LR_KFAC,
         damping=DAMPING,
         factor_update_freq=KFAC_FREQ,
-        inv_update_freq=KFAC_FREQ,
+        decomp_update_freq=KFAC_FREQ,
         rank=32,
         randomized=True,
         momentum=0.0,

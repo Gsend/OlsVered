@@ -21,7 +21,7 @@ class ConfigurationError(OlsSMError):
     Examples
     --------
     - ``rank`` and ``adaptive=True`` set simultaneously
-    - ``inv_update_freq < factor_update_freq``
+    - ``decomp_update_freq < factor_update_freq``
     - ``n_layers`` exceeds the number of linear layers in the model
     """
 

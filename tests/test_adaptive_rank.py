@@ -62,7 +62,7 @@ class TestFullEVDSmallMatrix:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             adaptive=True, adaptive_min_n=256,
         )
         _run_steps(model, opt, d_in=d_in, d_out=d_out)
@@ -91,7 +91,7 @@ class TestTruncatedEVDLargeMatrix:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             adaptive=True, adaptive_min_n=32, adaptive_rank_budget=16,
         )
         _run_steps(model, opt, d_in=d_in, d_out=d_out)
@@ -131,7 +131,7 @@ class TestRankClampedToMatrixSize:
         # rank=100 >> max_dim=12 → should be clamped, not crash
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             rank=100, randomized=False,  # exact topk path
         )
         # Should complete without error
@@ -146,7 +146,7 @@ class TestRankClampedToMatrixSize:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             rank=100, randomized=True,
         )
         _run_steps(model, opt, d_in=d_in, d_out=d_out)
@@ -166,7 +166,7 @@ class TestLayerRanksPopulated:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
         )
         _run_steps(model, opt, n_steps=2, d_in=d_in, d_out=d_out)
 
@@ -182,7 +182,7 @@ class TestLayerRanksPopulated:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             rank=None, adaptive=False,
         )
         _run_steps(model, opt, n_steps=2, d_in=d_in, d_out=d_out)
@@ -206,7 +206,7 @@ class TestFixedRank:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             rank=4, randomized=False,
         )
         _run_steps(model, opt, n_steps=5, d_in=d_in, d_out=d_out)
@@ -219,7 +219,7 @@ class TestFixedRank:
 
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             rank=4, randomized=True, n_power_iter=1,
         )
         _run_steps(model, opt, n_steps=5, d_in=d_in, d_out=d_out)
@@ -232,7 +232,7 @@ class TestFixedRank:
 
         opt = OlsSMKFAC(
             model, lr=1e-2, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             rank=4, randomized=False, momentum=0.0,
         )
 

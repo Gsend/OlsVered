@@ -37,7 +37,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         Tikhonov damping λ. Default: 1e-2.
     factor_update_freq : int
         How often to recompute Gram matrices. Default: 10.
-    inv_update_freq : int
+    decomp_update_freq : int
         How often to recompute cached inverses. Default: 10.
     weight_decay : float
         L2 regularisation. Default: 0.
@@ -56,7 +56,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         lr: float = 1e-3,
         damping: float = 1e-2,
         factor_update_freq: int = 10,
-        inv_update_freq: int = 10,
+        decomp_update_freq: int = 10,
         weight_decay: float = 0.0,
         momentum: float = 0.9,
         grad_clip: Optional[float] = None,
@@ -64,8 +64,8 @@ class ClassicKFAC(torch.optim.Optimizer):
         max_gram_dim: int = 0,
     ):
         logger.debug(
-            "ClassicKFAC init: factor_update_freq=%d  inv_update_freq=%d",
-            factor_update_freq, inv_update_freq,
+            "ClassicKFAC init: factor_update_freq=%d  decomp_update_freq=%d",
+            factor_update_freq, decomp_update_freq,
         )
         defaults = dict(lr=lr, damping=damping, weight_decay=weight_decay,
                         momentum=momentum)
@@ -78,7 +78,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         self.model = model
         self.damping = damping
         self.factor_update_freq = factor_update_freq
-        self.inv_update_freq = inv_update_freq
+        self.decomp_update_freq = decomp_update_freq
         self.grad_clip = grad_clip
         self.gamma = gamma
 
@@ -154,7 +154,7 @@ class ClassicKFAC(torch.optim.Optimizer):
         if self._step_count % self.factor_update_freq == 1 or self.factor_update_freq == 1:
             self._update_factors()
 
-        if self._step_count % self.inv_update_freq == 1 or self.inv_update_freq == 1:
+        if self._step_count % self.decomp_update_freq == 1 or self.decomp_update_freq == 1:
             if self._factors:
                 self._update_inverses()
 
@@ -250,7 +250,7 @@ class ClassicKFAC(torch.optim.Optimizer):
             f"ClassicKFAC("
             f"damping={self.damping}, "
             f"factor_update_freq={self.factor_update_freq}, "
-            f"inv_update_freq={self.inv_update_freq}, "
+            f"decomp_update_freq={self.decomp_update_freq}, "
             f"gamma={self.gamma}, "
             f"n_layers={len(self.hooks.linear_layers)})"
         )

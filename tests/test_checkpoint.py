@@ -74,7 +74,7 @@ class TestKFACStateDictRoundtrip:
     def test_state_dict_is_serialisable(self):
         """state_dict() should be saveable with torch.save."""
         model = _mlp()
-        opt = OlsSMKFAC(model, lr=1e-3, damping=1e-2, factor_update_freq=1, inv_update_freq=1)
+        opt = OlsSMKFAC(model, lr=1e-3, damping=1e-2, factor_update_freq=1, decomp_update_freq=1)
         _train_steps(model, opt)
 
         state = opt.state_dict()

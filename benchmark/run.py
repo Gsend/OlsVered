@@ -60,7 +60,7 @@ def create_optimizer(opt_name: str, model: nn.Module, lr: float,
         return OlsSMKFAC(
             model, lr=lr, damping=damping,
             factor_update_freq=factor_freq,
-            inv_update_freq=factor_freq,
+            decomp_update_freq=factor_freq,
             momentum=momentum,
         )
     elif opt_name == "classic_kfac":
@@ -68,7 +68,7 @@ def create_optimizer(opt_name: str, model: nn.Module, lr: float,
         return ClassicKFAC(
             model, lr=lr, damping=damping,
             factor_update_freq=factor_freq,
-            inv_update_freq=factor_freq,
+            decomp_update_freq=factor_freq,
             momentum=momentum,
         )
     else:

@@ -57,7 +57,7 @@ class TestOlsSMKFACConvergence:
     def test_olssm_step_reduces_loss_mlp(self):
         """OlsSMKFAC should reduce MSE loss over 60 steps on a random MLP."""
         model = _mlp()
-        opt = OlsSMKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
+        opt = OlsSMKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
         losses = _train(model, opt, steps=60)
         opt.cleanup()
 
@@ -69,7 +69,7 @@ class TestOlsSMKFACConvergence:
     def test_olssm_converges_quickly(self):
         """OlsSMKFAC should reach a reasonable loss within 60 steps."""
         model = _mlp()
-        opt = OlsSMKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
+        opt = OlsSMKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
         losses = _train(model, opt, steps=60)
         opt.cleanup()
 
@@ -82,7 +82,7 @@ class TestClassicKFACConvergence:
     def test_classic_kfac_step_reduces_loss_mlp(self):
         """ClassicKFAC should reduce MSE loss over 60 steps on a random MLP."""
         model = _mlp()
-        opt = ClassicKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
+        opt = ClassicKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
         losses = _train(model, opt, steps=60)
         opt.cleanup()
 
@@ -93,7 +93,7 @@ class TestClassicKFACConvergence:
     def test_classic_kfac_converges_quickly(self):
         """ClassicKFAC should reach a reasonable loss within 60 steps."""
         model = _mlp()
-        opt = ClassicKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
+        opt = ClassicKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
         losses = _train(model, opt, steps=60)
         opt.cleanup()
 
@@ -108,8 +108,8 @@ class TestBothOptimizersConverge:
         model_a = _mlp()
         model_b = copy.deepcopy(model_a)  # identical init
 
-        opt_a = OlsSMKFAC(model_a, lr=1e-2, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
-        opt_b = ClassicKFAC(model_b, lr=1e-2, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
+        opt_a = OlsSMKFAC(model_a, lr=1e-2, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
+        opt_b = ClassicKFAC(model_b, lr=1e-2, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
 
         losses_a = _train(model_a, opt_a, steps=80)
         losses_b = _train(model_b, opt_b, steps=80)
@@ -149,7 +149,7 @@ class TestNaturalGradient:
         grads = {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
 
         # Now apply K-FAC step
-        opt = OlsSMKFAC(model, lr=1.0, damping=1e-2, factor_update_freq=1, inv_update_freq=1, momentum=0.0)
+        opt = OlsSMKFAC(model, lr=1.0, damping=1e-2, factor_update_freq=1, decomp_update_freq=1, momentum=0.0)
         opt.step()
         opt.cleanup()
 
@@ -183,7 +183,7 @@ class TestMomentum:
         model = _mlp()
         opt = OlsSMKFAC(
             model, lr=1e-2, damping=1e-2,
-            factor_update_freq=2, inv_update_freq=2,
+            factor_update_freq=2, decomp_update_freq=2,
             momentum=0.9,
         )
 
@@ -211,7 +211,7 @@ class TestWeightDecay:
 
         opt = OlsSMKFAC(
             model, lr=5e-3, damping=1e-2,
-            factor_update_freq=5, inv_update_freq=5,
+            factor_update_freq=5, decomp_update_freq=5,
             weight_decay=0.1, momentum=0.0,
         )
         _train(model, opt, steps=100)
@@ -224,7 +224,7 @@ class TestWeightDecay:
 
         opt_no_wd = OlsSMKFAC(
             model_no_wd, lr=5e-3, damping=1e-2,
-            factor_update_freq=5, inv_update_freq=5,
+            factor_update_freq=5, decomp_update_freq=5,
             weight_decay=0.0, momentum=0.0,
         )
         _train(model_no_wd, opt_no_wd, steps=100)
@@ -257,7 +257,7 @@ class TestCleanup:
     def test_cleanup_clears_cached_inverses(self):
         """After cleanup(), _inverses and _factors should be empty."""
         model = _mlp()
-        opt = OlsSMKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=1, inv_update_freq=1)
+        opt = OlsSMKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=1, decomp_update_freq=1)
         _train(model, opt, steps=5)
         opt.cleanup()
 
@@ -267,7 +267,7 @@ class TestCleanup:
     def test_classic_cleanup(self):
         """ClassicKFAC.cleanup() should also clear all state."""
         model = _mlp()
-        opt = ClassicKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=1, inv_update_freq=1)
+        opt = ClassicKFAC(model, lr=1e-2, damping=1e-2, factor_update_freq=1, decomp_update_freq=1)
         _train(model, opt, steps=5)
         opt.cleanup()
 

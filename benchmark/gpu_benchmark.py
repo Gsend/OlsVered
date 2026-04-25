@@ -342,18 +342,18 @@ def run_mlp_benchmark(device, args):
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
         elif cfg['randomised']:
             from optimizer.olssm_kfac import OlsSMKFAC
-            # On GPU: inv_update_freq=10 is fine (EVD is fast).
+            # On GPU: decomp_update_freq=10 is fine (EVD is fast).
             # On CPU: increase to 50 to amortise the expensive EVD cost.
             evd_freq = 20 if torch.cuda.is_available() else 50
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=5e-3,
-                               factor_update_freq=20, inv_update_freq=evd_freq,
+                               factor_update_freq=20, decomp_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
                                grad_clip=10.0, gamma=0.99)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
-                              factor_update_freq=10, inv_update_freq=10,
+                              factor_update_freq=10, decomp_update_freq=10,
                               momentum=0.0, grad_clip=10.0, gamma=0.9)
 
         criterion  = nn.CrossEntropyLoss()
@@ -513,14 +513,14 @@ def run_bert_benchmark(device, args):
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=3e-3,
-                               factor_update_freq=20, inv_update_freq=5,
+                               factor_update_freq=20, decomp_update_freq=5,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=128, momentum=0.0,
                                grad_clip=1.0, gamma=0.95)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-4,
-                              factor_update_freq=20, inv_update_freq=50,
+                              factor_update_freq=20, decomp_update_freq=50,
                               momentum=0.0, grad_clip=5.0, gamma=0.9)
 
         if cfg['kfac']:
@@ -798,7 +798,7 @@ def run_cifar_benchmark(device, args):
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 20 if torch.cuda.is_available() else 50
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=5e-3,
-                               factor_update_freq=20, inv_update_freq=evd_freq,
+                               factor_update_freq=20, decomp_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
                                adaptive_rank_budget=256, momentum=0.0,
                                grad_clip=10.0, gamma=0.999)
@@ -807,7 +807,7 @@ def run_cifar_benchmark(device, args):
             # ClassicKFAC needs higher damping on CIFAR-10: direct inversion is
             # less stable than EVD and crashed (14% accuracy drops) at 5e-3.
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-2,
-                              factor_update_freq=20, inv_update_freq=20,
+                              factor_update_freq=20, decomp_update_freq=20,
                               momentum=0.0, grad_clip=10.0, gamma=0.9)
 
         criterion = nn.CrossEntropyLoss()
@@ -1126,7 +1126,7 @@ def run_transformer_benchmark(device, args):
             # Its G matrix (50257×50257 ≈ 10 GB) would cause OOM.
             # Embeddings + excluded head are updated by emb_opt (AdamW).
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=1e-3,
-                               factor_update_freq=20, inv_update_freq=evd_freq,
+                               factor_update_freq=20, decomp_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=128,
                                adaptive_rank_budget=128, momentum=0.0,
                                grad_clip=1.0, gamma=0.95,
@@ -1136,7 +1136,7 @@ def run_transformer_benchmark(device, args):
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
-                              factor_update_freq=20, inv_update_freq=20,
+                              factor_update_freq=20, decomp_update_freq=20,
                               momentum=0.0, grad_clip=1.0, gamma=0.9,
                               max_gram_dim=_KFAC_MAX_DIM)
             emb_opt = torch.optim.AdamW(other_params, lr=cfg['lr'],
@@ -1336,14 +1336,14 @@ def run_scaling_benchmark(device, args):
             elif cfg['randomised']:
                 from optimizer.olssm_kfac import OlsSMKFAC
                 return OlsSMKFAC(model, lr=1e-2, damping=1e-2,
-                                    factor_update_freq=1, inv_update_freq=1,
+                                    factor_update_freq=1, decomp_update_freq=1,
                                     adaptive=True, adaptive_min_n=32,
                                     adaptive_rank_budget=rank_budget,
                                     momentum=0.0, gamma=0.0)
             else:
                 from optimizer.classic_kfac import ClassicKFAC
                 return ClassicKFAC(model, lr=1e-2, damping=1e-2,
-                                   factor_update_freq=1, inv_update_freq=1,
+                                   factor_update_freq=1, decomp_update_freq=1,
                                    momentum=0.0, gamma=0.0)
 
         criterion = nn.CrossEntropyLoss()

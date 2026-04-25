@@ -3,7 +3,7 @@ Unit tests for error handling in optimizer/errors.py and the optimizer classes.
 
 Tests:
   P1 — ConfigurationError raised when rank + adaptive=True both set (OlsSMKFAC)
-  P1 — ConfigurationError raised when inv_update_freq < factor_update_freq (both optimizers)
+  P1 — ConfigurationError raised when decomp_update_freq < factor_update_freq (both optimizers)
   P1 — ConfigurationError raised when damping <= 0 (OlsSMKFAC)
   P1 — NaN in Gram matrix is silently skipped (no crash, no NaN weights)
   P1 — DataValidationError hierarchy is importable and inherits correctly
@@ -74,12 +74,12 @@ class TestOlsSMKFACValidation:
         with pytest.raises(ConfigurationError, match="mutually exclusive"):
             OlsSMKFAC(_mlp(), rank=8, adaptive=True)
 
-    def test_inv_update_freq_less_than_factor_update_allowed(self):
-        """inv_update_freq < factor_update_freq is allowed (redundant inverse updates)."""
+    def test_decomp_update_freq_less_than_factor_update_allowed(self):
+        """decomp_update_freq < factor_update_freq is allowed (redundant inverse updates)."""
         model = _mlp()
         # Should NOT raise: frequent inverse updates with infrequent factor updates is unusual
         # but valid — inverses simply re-use cached factors until factors refresh.
-        opt = OlsSMKFAC(model, factor_update_freq=20, inv_update_freq=5)
+        opt = OlsSMKFAC(model, factor_update_freq=20, decomp_update_freq=5)
         opt.cleanup()
 
     def test_zero_damping_raises(self):
@@ -95,7 +95,7 @@ class TestOlsSMKFACValidation:
     def test_valid_config_does_not_raise(self):
         """A valid configuration should construct without error."""
         model = _mlp()
-        opt = OlsSMKFAC(model, lr=1e-3, damping=1e-2, factor_update_freq=5, inv_update_freq=5)
+        opt = OlsSMKFAC(model, lr=1e-3, damping=1e-2, factor_update_freq=5, decomp_update_freq=5)
         opt.cleanup()  # cleanup hooks
 
     def test_valid_adaptive_no_rank(self):
@@ -117,21 +117,21 @@ class TestOlsSMKFACValidation:
 
 class TestClassicKFACValidation:
     def test_inv_update_lt_factor_update_allowed(self):
-        """ClassicKFAC: inv_update_freq < factor_update_freq is allowed."""
+        """ClassicKFAC: decomp_update_freq < factor_update_freq is allowed."""
         model = _mlp()
-        opt = ClassicKFAC(model, factor_update_freq=20, inv_update_freq=5)
+        opt = ClassicKFAC(model, factor_update_freq=20, decomp_update_freq=5)
         opt.cleanup()
 
     def test_equal_update_freqs_ok(self):
-        """factor_update_freq == inv_update_freq should be allowed."""
+        """factor_update_freq == decomp_update_freq should be allowed."""
         model = _mlp()
-        opt = ClassicKFAC(model, factor_update_freq=5, inv_update_freq=5)
+        opt = ClassicKFAC(model, factor_update_freq=5, decomp_update_freq=5)
         opt.cleanup()
 
     def test_inv_gt_factor_ok(self):
-        """inv_update_freq > factor_update_freq should be allowed."""
+        """decomp_update_freq > factor_update_freq should be allowed."""
         model = _mlp()
-        opt = ClassicKFAC(model, factor_update_freq=5, inv_update_freq=20)
+        opt = ClassicKFAC(model, factor_update_freq=5, decomp_update_freq=20)
         opt.cleanup()
 
 
@@ -148,7 +148,7 @@ class TestNanGramHandling:
         model = _mlp()
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             momentum=0.0,
         )
 
@@ -179,7 +179,7 @@ class TestNanGramHandling:
         model = _mlp()
         opt = OlsSMKFAC(
             model, lr=1e-3, damping=1e-2,
-            factor_update_freq=1, inv_update_freq=1,
+            factor_update_freq=1, decomp_update_freq=1,
             momentum=0.0,
         )
 
