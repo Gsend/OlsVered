@@ -1,0 +1,19 @@
+# CPU-only requirements for running Vered K-FAC tests and development.
+# No CUDA, no Rust extension needed.
+#
+# Install with:
+#   pip install -r requirements-cpu.txt
+#
+# Then run the Vered K-FAC tests with:
+#   pytest tests/test_vered_kfac.py -v
+
+# ── PyTorch CPU wheel ─────────────────────────────────────────────────────────
+--index-url https://download.pytorch.org/whl/cpu
+torch>=2.1.0
+
+# ── Numerical stack ───────────────────────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.10.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=7.4.0
