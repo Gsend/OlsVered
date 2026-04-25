@@ -294,7 +294,14 @@ class VeredKFAC(torch.optim.Optimizer):
                 tuple(grad_w.shape), tuple(R_X_w.shape), tuple(R_G.shape),
             )
 
-        # Handle shape mismatch gracefully (e.g. Conv2d weight reshape)
+        # Conv2d weights are 4D (C_out, C_in, kH, kW).
+        # The R factors are 2D (hooks use im2col to flatten spatial dims),
+        # so reshape to (C_out, C_in·kH·kW) before the triangular solves,
+        # then restore the original shape.
+        orig_shape = grad_w.shape
+        if grad_w.dim() > 2:
+            grad_w = grad_w.reshape(orig_shape[0], -1)
+
         try:
             nat_grad_w = apply_vered(grad_w, R_X_w, R_G)
         except Exception as e:
@@ -303,6 +310,8 @@ class VeredKFAC(torch.optim.Optimizer):
                 type(module).__name__, e,
             )
             nat_grad_w = grad_w
+
+        nat_grad_w = nat_grad_w.reshape(orig_shape)
 
         # Gradient clipping
         if self.grad_clip is not None:
