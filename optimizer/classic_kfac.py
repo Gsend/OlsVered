@@ -199,7 +199,16 @@ class ClassicKFAC(torch.optim.Optimizer):
                 else:
                     grad_w = module.weight.grad
 
+                # Conv2d weights are 4D (C_out, C_in, kH, kW).
+                # The Kronecker factors are 2D (the hooks use im2col to flatten
+                # the spatial dims), so we reshape to (C_out, C_in·kH·kW),
+                # apply G⁻¹ · grad · A⁻¹, then restore the original shape.
+                orig_shape = grad_w.shape
+                if grad_w.dim() > 2:
+                    grad_w = grad_w.reshape(orig_shape[0], -1)
+
                 nat_grad = G_inv @ grad_w @ A_inv
+                nat_grad = nat_grad.reshape(orig_shape)
 
                 # Clip to prevent divergence on early / rank-deficient steps
                 if self.grad_clip is not None:
