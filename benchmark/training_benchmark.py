@@ -76,7 +76,7 @@ KFAC_FREQ         = 20      # factor update frequency (steps) — same for all
 LR_ADAM           = 1e-3
 LR_KFAC           = 1e-2    # same lr for all three K-FAC methods
 KFAC_DAMPING      = 1e-3    # same damping for all three K-FAC methods
-KFAC_MOMENTUM     = 0.0     # same momentum for all three K-FAC methods
+KFAC_MOMENTUM     = 0.9     # momentum smooths noisy natural gradient steps and stale preconditioner
 KFAC_CLIP         = 10.0    # same gradient clip for all three K-FAC methods
 RESULTS_DIR       = ROOT / "benchmark" / "results"
 
@@ -370,7 +370,7 @@ def make_olssm_kfac(model):
     )
 
 VERED_LR          = 1.5e-2  # backed off from 2e-2 — slow convergence at step 460 suggests still too high
-VERED_CLIP        = 5.0     # clip: early training gradients can be large before R factors stabilise
+VERED_CLIP        = 20.0     # clip: early training gradients can be large before R factors stabilise
 
 def make_vered_kfac(model):
     """QR on raw activations X directly.  Error ∝ κ(X)¹.
