@@ -341,7 +341,7 @@ def make_classic_kfac(model):
         gamma=0.5,   # 0.9 was too slow to adapt — preconditioner lagged curvature for hundreds of steps
     )
 
-OLSSM_LR          = 1.5e-2  # moderate lr boost: Cholesky κ² vs LU κ⁴ allows slightly larger steps
+OLSSM_LR          = 1e-3  # moderate lr boost: Cholesky κ² vs LU κ⁴ allows slightly larger steps
 OLSSM_DAMPING     = 1e-3    # same as ClassicKFAC — 5e-4 caused divergence early in training
 OLSSM_CLIP        = 20.0    # looser clip: better-conditioned updates need less truncation
 
