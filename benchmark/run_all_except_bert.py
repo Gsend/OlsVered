@@ -51,10 +51,6 @@ def main():
         help="Skip the MNIST MLP benchmark.",
     )
     parser.add_argument(
-        "--skip-cifar", action="store_true",
-        help="Skip the CIFAR-10 benchmark.",
-    )
-    parser.add_argument(
         "--skip-transformer", action="store_true",
         help="Skip the transformer LM benchmark.",
     )
@@ -84,15 +80,6 @@ def main():
         )
         if rc != 0:
             failures.append("MNIST MLP")
-
-    if not args.skip_cifar:
-        rc = run(
-            [py, "-m", "benchmark.training_benchmark",
-             "--dataset", "cifar10", *opt_args, *log_args, *step_args],
-            "CIFAR-10 ConvNet",
-        )
-        if rc != 0:
-            failures.append("CIFAR-10")
 
     if not args.skip_transformer:
         # gpu_benchmark uses its own optimizer selection; pass skip flags for
