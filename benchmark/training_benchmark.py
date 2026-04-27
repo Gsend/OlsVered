@@ -75,7 +75,7 @@ KFAC_FREQ         = 20      # factor update frequency (steps) — same for all
 # 64 × 20 = 1280 >= 785  ✓   (64 × 10 = 640 < 785 → VeredKFAC skips fc1)
 LR_ADAM           = 1e-3
 LR_KFAC           = 1e-2    # same lr for all three K-FAC methods
-KFAC_DAMPING      = 5e-3    # same damping for all three K-FAC methods
+KFAC_DAMPING      = 1e-3    # same damping for all three K-FAC methods
 KFAC_MOMENTUM     = 0.0     # same momentum for all three K-FAC methods
 KFAC_CLIP         = 10.0    # same gradient clip for all three K-FAC methods
 RESULTS_DIR       = ROOT / "benchmark" / "results"
@@ -341,12 +341,13 @@ def make_classic_kfac(model):
     )
 
 def make_olssm_kfac(model):
-    """Gram matrix XᵀX → adaptive low-rank Cholesky.  Error ∝ κ(X)².
+    """Gram matrix XᵀX → Cholesky inversion.  Error ∝ κ(X)².
 
-    adaptive=True: layers with n >= 256 use a rank-64 truncated EVD instead of
-    full Cholesky.  For the MNIST MLP this hits fc1 (n=784) and fc2 (n=512);
-    for the CIFAR-10 ConvNet it also hits fc1 (n=1024).  This makes OlsSMKFAC
-    genuinely different from ClassicKFAC — the two curves should now diverge.
+    adaptive=True with adaptive_min_n=4096: EVD truncation is only triggered
+    for Gram matrices larger than 4096×4096, which won't appear in any of the
+    current benchmark models.  In practice this means full Cholesky is used
+    everywhere — making OlsSMKFAC a fair Cholesky-vs-LU comparison against
+    ClassicKFAC without the EVD overhead penalising smaller layers.
     """
     return OlsSMKFAC(
         model,
@@ -356,7 +357,8 @@ def make_olssm_kfac(model):
         decomp_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
-        adaptive=True,           # rank-64 truncation for layers with n >= 256
+        adaptive=True,
+        adaptive_min_n=4096,     # EVD only kicks in for n >= 4096 (not hit here)
     )
 
 def make_vered_kfac(model):
@@ -368,6 +370,7 @@ def make_vered_kfac(model):
         factor_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
+        gamma=0.9,               # EMA smoothing on R factors — stabilises QR across updates
     )
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
@@ -434,7 +437,7 @@ def plot_results(all_results, results_dir):
         fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5))
         fig2.suptitle(
             "K-FAC algorithm comparison (same lr / damping / update-freq)\n"
-            "ClassicKFAC: κ⁴ error  |  OlsSMKFAC: κ² error (adaptive rank-64)  |  VeredKFAC: κ¹ error",
+            "ClassicKFAC: LU inversion  |  OlsSMKFAC: Cholesky (κ² error)  |  VeredKFAC: QR on raw activations (κ¹ error)",
             fontsize=11,
         )
 
