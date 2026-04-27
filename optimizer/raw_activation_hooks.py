@@ -111,10 +111,12 @@ class RawActivationHooks(GramMatrixEstimator):
         damping: float = 1e-2,
         max_out_dim: int = 0,
         augment_bias: bool = False,
+        max_conv_rows: int = 512,
     ):
         self.model = model
         self.damping = damping
         self.augment_bias = augment_bias
+        self.max_conv_rows = max_conv_rows  # cap Conv2d patch rows per batch (0 = no cap)
 
         self._handles: List[torch.utils.hooks.RemovableHook] = []
         self._enabled = False
@@ -304,6 +306,13 @@ class RawActivationHooks(GramMatrixEstimator):
 
         if isinstance(module, nn.Conv2d):
             x = self._unfold_conv_input(x, module)   # (B·L, C_in·kH·kW)
+            # Spatial patches are highly correlated — subsample to cap the leaf
+            # QR size.  Without this, a CIFAR-10 conv layer produces 8192 rows
+            # per batch (128 images × 64 spatial locations), making streaming
+            # TSQR the per-step bottleneck even on GPU.
+            if self.max_conv_rows > 0 and x.shape[0] > self.max_conv_rows:
+                idx = torch.randperm(x.shape[0], device=x.device)[:self.max_conv_rows]
+                x = x[idx]
         elif x.ndim > 2:
             x = x.reshape(-1, x.shape[-1])            # (B·T, d_in)
 
