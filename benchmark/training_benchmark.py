@@ -341,7 +341,7 @@ def make_classic_kfac(model):
         gamma=0.5,   # 0.9 was too slow to adapt — preconditioner lagged curvature for hundreds of steps
     )
 
-OLSSM_LR          = 1.5e-2  # moderate lr boost: Cholesky κ² vs LU κ⁴ allows slightly larger steps
+OLSSM_LR          = 1e-2    # same as ClassicKFAC — 1.5e-2 diverged at warmup peak (step 50)
 OLSSM_DAMPING     = 1e-3    # same as ClassicKFAC — 5e-4 caused divergence early in training
 OLSSM_CLIP        = 20.0    # looser clip: better-conditioned updates need less truncation
 
@@ -349,8 +349,9 @@ def make_olssm_kfac(model):
     """Gram matrix XᵀX → Cholesky inversion.  Error ∝ κ(X)².
 
     Tuned independently from ClassicKFAC to exploit OlsSMKFAC's advantages:
-      - 1.5× higher lr    (Cholesky κ² vs LU κ⁴ → steps are more accurate)
-      - lower damping 5e-4 (Cholesky is more stable near singularity than LU)
+      - same lr as ClassicKFAC (1.5× lr caused divergence at the LR-warmup peak;
+        Cholesky's advantage shows in convergence quality, not necessarily needing
+        a higher peak LR — especially with cold Gram matrices in the first 50 steps)
       - looser grad_clip   (better-conditioned updates need less truncation)
 
     adaptive_min_n=4096: EVD only triggers for n >= 4096 (not present in current

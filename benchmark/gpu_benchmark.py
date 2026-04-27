@@ -484,10 +484,13 @@ def run_bert_benchmark(device, args):
     val_loader = DataLoader(encoded["validation"], batch_size=256,
                             collate_fn=collator, num_workers=2)
 
+    _lr_vered_bert = (args.lr_vered_bert
+                      if args.lr_vered_bert is not None else 3e-3)
     configs = [
-        dict(name="Adam",         B=32,  lr=2e-5, kfac=False),
-        dict(name="OlsSMKFAC", B=512, lr=3e-3, kfac=True,  randomised=True),
-        dict(name="ClassicKFAC",  B=512, lr=5e-3, kfac=True,  randomised=False),
+        dict(name="Adam",        B=32,  lr=2e-5,          kfac=False),
+        dict(name="OlsSMKFAC",  B=512, lr=3e-3,          kfac=True, randomised=True),
+        dict(name="ClassicKFAC", B=512, lr=5e-3,          kfac=True, randomised=False),
+        dict(name="VeredKFAC",   B=32,  lr=_lr_vered_bert, kfac=True, vered=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -509,6 +512,13 @@ def run_bert_benchmark(device, args):
         if not cfg['kfac']:
             opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'],
                                     weight_decay=0.001)
+        elif cfg.get('vered'):
+            from optimizer.vered_kfac import VeredKFAC
+            # B=32 × seq_len=128 × freq=20 = 81920 rows per R update;
+            # max n_in = 3072 (BERT FFN): 81920 >> 3072  ✓
+            opt = VeredKFAC(model, lr=cfg['lr'], damping=1e-3,
+                            factor_update_freq=20,
+                            momentum=0.9, grad_clip=5.0, gamma=0.7)
         elif cfg['randomised']:
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
@@ -1063,12 +1073,14 @@ def run_transformer_benchmark(device, args):
 
     vocab_size = tokenizer.vocab_size   # 50 257
 
-    _lr_ols = args.lr_ols_transformer if args.lr_ols_transformer is not None else 8e-3
-    _lr_cls = args.lr_cls_transformer if args.lr_cls_transformer is not None else 8e-3
+    _lr_ols   = args.lr_ols_transformer   if args.lr_ols_transformer   is not None else 8e-3
+    _lr_cls   = args.lr_cls_transformer   if args.lr_cls_transformer   is not None else 8e-3
+    _lr_vered = args.lr_vered_transformer if args.lr_vered_transformer is not None else 1e-2
     configs = [
-        dict(name="Adam",         B=32, lr=3e-4,   kfac=False),
-        dict(name="OlsSMKFAC", B=64, lr=_lr_ols, kfac=True, randomised=True),
-        dict(name="ClassicKFAC",  B=64, lr=_lr_cls, kfac=True, randomised=False),
+        dict(name="Adam",        B=32, lr=3e-4,    kfac=False),
+        dict(name="OlsSMKFAC",  B=64, lr=_lr_ols,  kfac=True, randomised=True),
+        dict(name="ClassicKFAC", B=64, lr=_lr_cls,  kfac=True, randomised=False),
+        dict(name="VeredKFAC",   B=64, lr=_lr_vered, kfac=True, vered=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -1118,6 +1130,18 @@ def run_transformer_benchmark(device, args):
             opt = torch.optim.AdamW(model.parameters(), lr=cfg['lr'],
                                     weight_decay=0.01)
             emb_opt = None
+        elif cfg.get('vered'):
+            from optimizer.vered_kfac import VeredKFAC
+            # B=64 × seq_len=128 = 8192 rows/step; freq=20 → 163840 rows/R update.
+            # max n_in = embedding_dim (512 for SmallGPT): 163840 >> 512  ✓
+            # max_out_dim=4096: excludes LM head (out=50257) — same policy as
+            # OlsSMKFAC/ClassicKFAC via max_gram_dim.  Head is updated by emb_opt.
+            opt = VeredKFAC(model, lr=cfg['lr'], damping=1e-3,
+                            factor_update_freq=20,
+                            momentum=0.9, grad_clip=20.0, gamma=0.7,
+                            max_out_dim=_KFAC_MAX_DIM)
+            emb_opt = torch.optim.AdamW(other_params, lr=cfg['lr'],
+                                        weight_decay=0.01)
         elif cfg['randomised']:
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 5 if torch.cuda.is_available() else 20
@@ -1652,10 +1676,16 @@ def main():
     )
     parser.add_argument("--lr-ols-transformer", type=float, default=None,
                         help="Override learning rate for OlsSMKFAC in transformer task. "
-                             "Default: 3e-3. Example: --lr-ols-transformer 5e-3")
+                             "Default: 8e-3. Example: --lr-ols-transformer 5e-3")
     parser.add_argument("--lr-cls-transformer", type=float, default=None,
                         help="Override learning rate for ClassicKFAC in transformer task. "
-                             "Default: 3e-3. Example: --lr-cls-transformer 5e-3")
+                             "Default: 8e-3. Example: --lr-cls-transformer 5e-3")
+    parser.add_argument("--lr-vered-transformer", type=float, default=None,
+                        help="Override learning rate for VeredKFAC in transformer task. "
+                             "Default: 1e-2. Example: --lr-vered-transformer 5e-3")
+    parser.add_argument("--lr-vered-bert", type=float, default=None,
+                        help="Override learning rate for VeredKFAC in BERT task. "
+                             "Default: 3e-3. Example: --lr-vered-bert 5e-3")
     parser.add_argument("--lr-sweep-transformer", action="store_true",
                         help="Run a learning-rate sweep for both K-FAC optimizers in the "
                              "transformer task. Tests [1e-3, 3e-3, 5e-3, 8e-3] for each "
