@@ -512,16 +512,15 @@ def run_bert_benchmark(device, args):
         elif cfg['randomised']:
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 50 if torch.cuda.is_available() else 100
-            opt = OlsSMKFAC(model, lr=cfg['lr'], damping=3e-3,
-                               factor_update_freq=20, decomp_update_freq=5,
-                               adaptive=True, adaptive_min_n=256,
-                               adaptive_rank_budget=128, momentum=0.0,
-                               grad_clip=1.0, gamma=0.95)
+            opt = OlsSMKFAC(model, lr=cfg['lr'], damping=1e-3,
+                               factor_update_freq=20, decomp_update_freq=evd_freq,
+                               adaptive=True, adaptive_min_n=4096,
+                               momentum=0.9, grad_clip=20.0, gamma=0.5)
         else:
             from optimizer.classic_kfac import ClassicKFAC
-            opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-4,
+            opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
                               factor_update_freq=20, decomp_update_freq=50,
-                              momentum=0.0, grad_clip=5.0, gamma=0.9)
+                              momentum=0.9, grad_clip=10.0, gamma=0.5)
 
         if cfg['kfac']:
             warmup       = 200
@@ -1127,9 +1126,8 @@ def run_transformer_benchmark(device, args):
             # Embeddings + excluded head are updated by emb_opt (AdamW).
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=1e-3,
                                factor_update_freq=20, decomp_update_freq=evd_freq,
-                               adaptive=True, adaptive_min_n=128,
-                               adaptive_rank_budget=128, momentum=0.0,
-                               grad_clip=1.0, gamma=0.95,
+                               adaptive=True, adaptive_min_n=4096,
+                               momentum=0.9, grad_clip=20.0, gamma=0.5,
                                max_gram_dim=_KFAC_MAX_DIM)
             emb_opt = torch.optim.AdamW(other_params, lr=cfg['lr'],
                                         weight_decay=0.01)
@@ -1137,7 +1135,7 @@ def run_transformer_benchmark(device, args):
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-3,
                               factor_update_freq=20, decomp_update_freq=20,
-                              momentum=0.0, grad_clip=1.0, gamma=0.9,
+                              momentum=0.9, grad_clip=10.0, gamma=0.5,
                               max_gram_dim=_KFAC_MAX_DIM)
             emb_opt = torch.optim.AdamW(other_params, lr=cfg['lr'],
                                         weight_decay=0.01)
