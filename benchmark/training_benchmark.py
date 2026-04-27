@@ -369,7 +369,7 @@ def make_olssm_kfac(model):
         gamma=0.5,   # 0.9 caused the same sluggish warmup as ClassicKFAC
     )
 
-VERED_LR          = 1.5e-2  # backed off from 2e-2 — slow convergence at step 460 suggests still too high
+VERED_LR          = 1.0e-2  # backed off from 2e-2 — slow convergence at step 460 suggests still too high
 VERED_CLIP        = 20.0     # clip: early training gradients can be large before R factors stabilise
 
 def make_vered_kfac(model):
