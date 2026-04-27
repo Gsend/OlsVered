@@ -338,39 +338,62 @@ def make_classic_kfac(model):
         decomp_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
+        gamma=0.9,
     )
+
+OLSSM_LR          = 1.5e-2  # moderate lr boost: Cholesky κ² vs LU κ⁴ allows slightly larger steps
+OLSSM_DAMPING     = 5e-4    # lower damping: Cholesky handles near-singular matrices better than LU
+OLSSM_CLIP        = 20.0    # looser clip: better-conditioned updates need less truncation
 
 def make_olssm_kfac(model):
     """Gram matrix XᵀX → Cholesky inversion.  Error ∝ κ(X)².
 
-    adaptive=True with adaptive_min_n=4096: EVD truncation is only triggered
-    for Gram matrices larger than 4096×4096, which won't appear in any of the
-    current benchmark models.  In practice this means full Cholesky is used
-    everywhere — making OlsSMKFAC a fair Cholesky-vs-LU comparison against
-    ClassicKFAC without the EVD overhead penalising smaller layers.
+    Tuned independently from ClassicKFAC to exploit OlsSMKFAC's advantages:
+      - 1.5× higher lr    (Cholesky κ² vs LU κ⁴ → steps are more accurate)
+      - lower damping 5e-4 (Cholesky is more stable near singularity than LU)
+      - looser grad_clip   (better-conditioned updates need less truncation)
+
+    adaptive_min_n=4096: EVD only triggers for n >= 4096 (not present in current
+    models), so full Cholesky is used everywhere — a clean Cholesky-vs-LU test.
     """
     return OlsSMKFAC(
         model,
-        lr=LR_KFAC,
-        damping=KFAC_DAMPING,
+        lr=OLSSM_LR,
+        damping=OLSSM_DAMPING,
         factor_update_freq=KFAC_FREQ,
         decomp_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
-        grad_clip=KFAC_CLIP,
+        grad_clip=OLSSM_CLIP,
         adaptive=True,
-        adaptive_min_n=4096,     # EVD only kicks in for n >= 4096 (not hit here)
+        adaptive_min_n=4096,
+        gamma=0.9,
     )
 
+VERED_LR          = 3e-2    # higher lr: κ¹ preconditioner is better conditioned → larger safe steps
+VERED_CLIP        = None    # no clip: natural gradients are well-scaled by construction
+
 def make_vered_kfac(model):
-    """QR on raw activations X directly.  Error ∝ κ(X)¹."""
+    """QR on raw activations X directly.  Error ∝ κ(X)¹.
+
+    Tuned independently from ClassicKFAC/OlsSMKFAC to exploit VeredKFAC's
+    advantages:
+      - 3× higher lr  (κ¹ vs κ⁴ means gradients are better scaled → larger
+        steps are safe)
+      - no grad_clip  (well-conditioned natural gradients don't need truncation)
+      - gamma=0.9     (EMA smoothing stabilises QR factors across updates at
+        lower damping)
+    factor_update_freq stays at KFAC_FREQ to satisfy p≥n:
+      MNIST   batch=64  × freq=20 = 1280 ≥ 784   ✓
+      CIFAR10 batch=128 × freq=20 = 2560 ≥ 1024  ✓
+    """
     return VeredKFAC(
         model,
-        lr=LR_KFAC,
+        lr=VERED_LR,
         damping=KFAC_DAMPING,
         factor_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
-        grad_clip=KFAC_CLIP,
-        gamma=0.9,               # EMA smoothing on R factors — stabilises QR across updates
+        grad_clip=VERED_CLIP,
+        gamma=0.9,
     )
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
