@@ -338,7 +338,7 @@ def make_classic_kfac(model):
         decomp_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
         grad_clip=KFAC_CLIP,
-        gamma=0.9,
+        gamma=0.5,   # 0.9 was too slow to adapt — preconditioner lagged curvature for hundreds of steps
     )
 
 OLSSM_LR          = 1.5e-2  # moderate lr boost: Cholesky κ² vs LU κ⁴ allows slightly larger steps
@@ -366,11 +366,11 @@ def make_olssm_kfac(model):
         grad_clip=OLSSM_CLIP,
         adaptive=True,
         adaptive_min_n=4096,
-        gamma=0.9,
+        gamma=0.5,   # 0.9 caused the same sluggish warmup as ClassicKFAC
     )
 
-VERED_LR          = 2e-2    # higher lr than Classic/OlsSM — backed off from 3e-2 which diverged
-VERED_CLIP        = 5.0     # clip re-added: early training gradients can still be large before R stabilises
+VERED_LR          = 1.5e-2  # backed off from 2e-2 — slow convergence at step 460 suggests still too high
+VERED_CLIP        = 5.0     # clip: early training gradients can be large before R factors stabilise
 
 def make_vered_kfac(model):
     """QR on raw activations X directly.  Error ∝ κ(X)¹.
@@ -393,7 +393,7 @@ def make_vered_kfac(model):
         factor_update_freq=KFAC_FREQ,
         momentum=KFAC_MOMENTUM,
         grad_clip=VERED_CLIP,
-        gamma=0.9,
+        gamma=0.7,   # reduced from 0.9 — heavy smoothing was slowing R factor adaptation
     )
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
