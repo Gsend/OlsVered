@@ -1,0 +1,188 @@
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : adam,adam_head,lora_r4,ols_n1,ols_n2,ols_n4,als_lora_n2_r4,als_lora_n4_r4,ols_lora_r4
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes adam,adam_head,lora_r4,ols_n1,ols_n2,ols_n4,als_lora_n2_r4,als_lora_n4_r4,ols_lora_r4 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag full_benchmark
+
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : adam, adam_head, lora_r4, ols_n1, ols_n2, ols_n4, als_lora_n2_r4, als_lora_n4_r4, ols_lora_r4
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 3706.05it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.seq_relationship.bias                  | UNEXPECTED | 
+cls.predictions.bias                       | UNEXPECTED | 
+cls.seq_relationship.weight                | UNEXPECTED | 
+classifier.bias                            | MISSING    | 
+classifier.weight                          | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+  bert-base-uncased  (109.5M parameters)
+
+Preparing data ...
+  Loading dataset 'sst2' ...
+  Train: 67349 samples  |  Eval: 872 samples
+
+Evaluating pretrained model (zero-shot baseline) ...
+  Pretrained accuracy: 50.92%  loss: 0.6914
+
+────────────────────────────────────────────────────────────
+[AdamW (full)]
+  Trainable params: 109,483,778 / 109,483,778
+  step 0/2105  loss=0.6959
+  step 100/2105  loss=0.5297
+  step 200/2105  loss=0.3341
+  step 300/2105  loss=0.3354
+  step 400/2105  loss=0.3323
+  step 500/2105  loss=0.2056
+  step 600/2105  loss=0.0719
+  step 700/2105  loss=0.0887
+  step 800/2105  loss=0.3550
+  step 900/2105  loss=0.0494
+  step 1000/2105  loss=0.1261
+  step 1100/2105  loss=0.1434
+  step 1200/2105  loss=0.1691
+  step 1300/2105  loss=0.0642
+  step 1400/2105  loss=0.0696
+  step 1500/2105  loss=0.3373
+  step 1600/2105  loss=0.1088
+  step 1700/2105  loss=0.0957
+  step 1800/2105  loss=0.2271
+  step 1900/2105  loss=0.0800
+  step 2000/2105  loss=0.2585
+  step 2100/2105  loss=0.2052
+  → accuracy=0.9209  loss=0.2201  time=480s  mem=4.02GB
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_full_benchmark.json)
+
+────────────────────────────────────────────────────────────
+[AdamW (head only)]
+  Trainable params: 592,130 / 109,483,778
+  step 0/2105  loss=0.6972
+  step 100/2105  loss=0.6724
+  step 200/2105  loss=0.6259
+  step 300/2105  loss=0.5825
+  step 400/2105  loss=0.6391
+  step 500/2105  loss=0.5836
+  step 600/2105  loss=0.6151
+  step 700/2105  loss=0.4202
+  step 800/2105  loss=0.5994
+  step 900/2105  loss=0.5226
+  step 1000/2105  loss=0.5075
+  step 1100/2105  loss=0.5201
+  step 1200/2105  loss=0.4352
+  step 1300/2105  loss=0.5305
+  step 1400/2105  loss=0.4285
+  step 1500/2105  loss=0.5488
+  step 1600/2105  loss=0.3880
+  step 1700/2105  loss=0.3566
+  step 1800/2105  loss=0.4281
+  step 1900/2105  loss=0.5141
+  step 2000/2105  loss=0.3549
+  step 2100/2105  loss=0.4135
+  → accuracy=0.8314  loss=0.3799  time=164s  mem=0.63GB
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_full_benchmark.json)
+
+────────────────────────────────────────────────────────────
+[LoRA r=4]
+  peft not installed — using manual LoRA
+  Trainable params: 669,696 / 110,153,474
+  step 0/2105  loss=0.6969
+  step 100/2105  loss=0.2323
+  step 200/2105  loss=0.3296
+  step 300/2105  loss=0.3193
+  step 400/2105  loss=0.2474
+  step 500/2105  loss=0.2546
+  step 600/2105  loss=0.3853
+  step 700/2105  loss=0.3052
+  step 800/2105  loss=0.2925
+  step 900/2105  loss=0.3001
+  step 1000/2105  loss=0.2652
+  step 1100/2105  loss=0.2141
+  step 1200/2105  loss=0.3381
+  step 1300/2105  loss=0.1258
+  step 1400/2105  loss=0.1536
+  step 1500/2105  loss=0.1910
+  step 1600/2105  loss=0.0630
+  step 1700/2105  loss=0.2950
+  step 1800/2105  loss=0.1192
+  step 1900/2105  loss=0.1407
+  step 2000/2105  loss=0.0488
+  step 2100/2105  loss=0.1340
+  → accuracy=0.9232  loss=0.2136  time=402s  mem=3.11GB
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_full_benchmark.json)
+
+────────────────────────────────────────────────────────────
+[OLS  N=1]
+[OlsSMLayerRetrainer] Retraining 1 layer(s)  [bcd=gauss_seidel residual]:
+  [0] Linear(768 → 2, bias)
+  Retraining 1 of 74 Linear layers  (pure OLS)
+[OlsSMLayerRetrainer] Single-layer solve done. max|ΔW| = 2.35e+01  (n=67349)
+  → accuracy=0.8280  loss=0.4981  time=162s  mem=0.62GB  sweeps=1
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_full_benchmark.json)
+
+────────────────────────────────────────────────────────────
+[OLS  N=2 (BCD)]
+  [BCD stability]  N=2  → capped at max_sweeps=1  (warm-start + 1 sweep, avoids sweep-2+ divergence)
+  [lambda scaling]  N=2  λ=1e-04 → 3.00e-02
+[OlsSMLayerRetrainer] Retraining 2 layer(s)  [bcd=gauss_seidel full-replace]:
+  [0] Linear(768 → 768, bias)  → Tanh
+  [1] Linear(768 → 2, bias)
+  Retraining 2 of 74 Linear layers  (pure OLS)
+[BCD warm-start]  Pre-solving output layer (N=1 OLS) …
+[BCD final]  Output layer re-solved.  max|ΔW| = 1.81e+01
+[BCD warm-start]  done.  max|ΔW_last| = 1.81e+01
+[BCD sweep 1/1]  max|ΔW| = 3.50e+00  (L0:3.96e-01  L1:3.50e+00)
+  → accuracy=0.8578  loss=0.4742  time=491s  mem=0.64GB  sweeps=1
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_full_benchmark.json)
+
+────────────────────────────────────────────────────────────
+[OLS  N=4 (BCD)]
+  [BCD stability]  N=4  → capped at max_sweeps=1  (warm-start + 1 sweep, avoids sweep-2+ divergence)
+  [lambda scaling]  N=4  λ=1e-04 → 1.00e+00
+[OlsSMLayerRetrainer] Retraining 4 layer(s)  [bcd=gauss_seidel full-replace]:
+  [0] Linear(768 → 3072, bias)
+  [1] Linear(3072 → 768, bias)
+  [2] Linear(768 → 768, bias)  → Tanh
+  [3] Linear(768 → 2, bias)
+  Retraining 4 of 74 Linear layers  (pure OLS)
+[BCD warm-start]  Pre-solving output layer (N=1 OLS) …
+[BCD final]  Output layer re-solved.  max|ΔW| = 1.52e+00
+[BCD warm-start]  done.  max|ΔW_last| = 1.52e+00
+[BCD sweep 1/1]  max|ΔW| = 2.15e+00  (L0:4.48e-01  L1:2.15e+00  L2:3.94e-01  L3:3.91e-02)
+  → accuracy=0.8727  loss=0.4678  time=909s  mem=0.83GB  sweeps=1
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_full_benchmark.json)
+
+────────────────────────────────────────────────────────────
+[ALS-LoRA N=2 r=4]
+  [BCD stability]  N=2  → capped at max_sweeps=1
+  [lambda scaling]  N=2  λ=1e-04 → 3.00e-02
+[OlsSMLayerRetrainer] Retraining 2 layer(s)  [bcd=gauss_seidel full-replace]:
+  [0] Linear(768 → 768, bias)  → Tanh
+  [1] Linear(768 → 2, bias)
+  ALS-LoRA on last 2 of 74 Linear layers  (rank=4, 9,224 adapter params, 5 ALS sweeps)
+[OlsSMLayerRetrainer] SVD-LoRA  rank=4  (OLS/BCD → SVD compress → apply)
+[BCD warm-start]  Pre-solving output layer (N=1 OLS) …
+[BCD final]  Output layer re-solved.  max|ΔW| = 1.18e+03
+[BCD warm-start]  done.  max|ΔW_last| = 1.18e+03
+[BCD sweep 1/5]  max|ΔW| = 1.18e+03  (L0:3.93e-01  L1:1.18e+03)
+[BCD sweep 2/5]  max|ΔW| = 9.09e+02  (L0:8.16e-01  L1:9.09e+02)
+[BCD sweep 3/5]  max|ΔW| = 9.07e+02  (L0:8.17e-01  L1:9.07e+02)
+[BCD sweep 4/5]  max|ΔW| = 2.77e+03  (L0:1.54e-01  L1:2.77e+03)

@@ -1,0 +1,39 @@
+
+[0;36m══ mode=ols_n1  bcd=gauss_seidel  tag=n1 ══[0m
+[0;32m[INFO][0m  18:36:25  Command: bash /root/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n1 --bcd-mode gauss_seidel --tag n1
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : ols_n1
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes ols_n1 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag n1
+
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : ols_n1
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 3944.96it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.seq_relationship.weight                | UNEXPECTED | 
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.seq_relationship.bias                  | UNEXPECTED | 
+cls.predictions.bias                       | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+classifier.bias                            | MISSING    | 
+classifier.weight                          | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.

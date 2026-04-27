@@ -1,0 +1,119 @@
+[1;33m[WARN][0m  Skipping ols_n1 — result already exists: retrainer_bert_base_uncased_sst2_n1.json
+[1;33m[WARN][0m  Skipping ols_n2 — result already exists: retrainer_bert_base_uncased_sst2_n2_gs.json
+[1;33m[WARN][0m  Skipping ols_n4 — result already exists: retrainer_bert_base_uncased_sst2_n4.json
+
+[0;36m══ mode=als_lora_n1_r4  bcd=gauss_seidel  tag=alslora_n1_r4 ══[0m
+[0;32m[INFO][0m  18:37:22  Command: bash /root/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes als_lora_n1_r4 --bcd-mode gauss_seidel --tag alslora_n1_r4
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : als_lora_n1_r4
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes als_lora_n1_r4 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag alslora_n1_r4
+
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : als_lora_n1_r4
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 3755.21it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.seq_relationship.weight                | UNEXPECTED | 
+cls.predictions.bias                       | UNEXPECTED | 
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.seq_relationship.bias                  | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+classifier.bias                            | MISSING    | 
+classifier.weight                          | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+  bert-base-uncased  (109.5M parameters)
+
+Preparing data ...
+  Loading dataset 'sst2' ...
+  Train: 67349 samples  |  Eval: 872 samples
+
+Evaluating pretrained model (zero-shot baseline) ...
+  Pretrained accuracy: 50.92%  loss: 0.6914
+
+────────────────────────────────────────────────────────────
+[ALS-LoRA N=1 r=4]
+[OlsSMLayerRetrainer] Retraining 1 layer(s)  [bcd=gauss_seidel residual]:
+  [0] Linear(768 → 2, bias)
+  ALS-LoRA on last 1 of 74 Linear layers  (rank=4, 3,080 adapter params, 5 ALS sweeps)
+[OlsSMLayerRetrainer] SVD-LoRA  rank=4  (OLS/BCD → SVD compress → apply)
+[OlsSMLayerRetrainer] Single-layer solve done. max|ΔW| = 6.47e+01  (n=67349)
+  [SVD L0]  ‖ΔW_ols‖=3.073e+02  rank-2 capture=100.0%  ‖BA‖=3.073e+02
+  [SVD-merge L0]  applied  ‖BA‖=3.073e+02
+  → accuracy=0.7511  loss=0.5452  time=160s  mem=0.59GB  als_sweeps=5
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_alslora_n1_r4.json)
+
+════════════════════════════════════════════════════════════════════════════════
+  MODE                        ACC     LOSS   TIME(s)   MEM(GB)   PARAMS(M)   PASSES
+────────────────────────────────────────────────────────────────────────────────
+  Pretrained (no FT)       50.92%   0.6914         0     0.000        0.0M      0.0
+  ALS-LoRA N=1 r=4         75.11%   0.5452       160     0.593        0.0M      5.0
+════════════════════════════════════════════════════════════════════════════════
+
+  Best accuracy : ALS-LoRA N=1 r=4  (75.11%)
+  Fastest within 1pp of best: ALS-LoRA N=1 r=4  (160s, 75.11%)
+
+  Plot saved: /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2.png
+  Scatter plot saved: /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_scatter.png
+
+Done. Results in: /root/OlsVered/benchmark/results
+[0;32m[INFO][0m  als_lora_n1_r4 completed in 179s  →  retrainer_bert_base_uncased_sst2_alslora_n1_r4.json
+
+[0;36m══ mode=als_lora_n2_r4  bcd=gauss_seidel  tag=alslora_n2_r4 ══[0m
+[0;32m[INFO][0m  18:40:21  Command: bash /root/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes als_lora_n2_r4 --bcd-mode gauss_seidel --tag alslora_n2_r4
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : als_lora_n2_r4
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes als_lora_n2_r4 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag alslora_n2_r4
+
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : als_lora_n2_r4
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 3813.91it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.predictions.bias                       | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+cls.seq_relationship.weight                | UNEXPECTED | 
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.seq_relationship.bias                  | UNEXPECTED | 
+classifier.weight                          | MISSING    | 
+classifier.bias                            | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.

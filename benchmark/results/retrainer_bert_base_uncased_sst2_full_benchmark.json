@@ -1,0 +1,109 @@
+{
+  "model": "bert-base-uncased",
+  "task": "sst2",
+  "modes_run": [
+    "pretrained",
+    "adam",
+    "adam_head",
+    "lora_r4",
+    "ols_n1",
+    "ols_n2",
+    "ols_n4"
+  ],
+  "pretrained_accuracy": 0.5091743119266054,
+  "results": [
+    {
+      "mode": "pretrained",
+      "label": "Pretrained (no FT)",
+      "accuracy": 0.5092,
+      "loss": 0.6914,
+      "wall_s": 0,
+      "peak_mem_gb": 0.0,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 0
+    },
+    {
+      "mode": "adam",
+      "label": "AdamW (full)",
+      "accuracy": 0.9209,
+      "loss": 0.2201,
+      "wall_s": 480.31,
+      "peak_mem_gb": 4.015,
+      "n_trainable": 109483778,
+      "n_total": 109483778,
+      "n_data_passes": 1
+    },
+    {
+      "mode": "adam_head",
+      "label": "AdamW (head only)",
+      "accuracy": 0.8314,
+      "loss": 0.3799,
+      "wall_s": 163.66,
+      "peak_mem_gb": 0.626,
+      "n_trainable": 592130,
+      "n_total": 109483778,
+      "n_data_passes": 1
+    },
+    {
+      "mode": "lora_r4",
+      "label": "LoRA r=4",
+      "accuracy": 0.9232,
+      "loss": 0.2136,
+      "wall_s": 401.97,
+      "peak_mem_gb": 3.11,
+      "n_trainable": 669696,
+      "n_total": 110153474,
+      "n_data_passes": 1,
+      "peft_used": false
+    },
+    {
+      "mode": "ols_n1",
+      "label": "OLS  N=1",
+      "accuracy": 0.828,
+      "loss": 0.4981,
+      "wall_s": 161.93,
+      "peak_mem_gb": 0.62,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 1,
+      "n_layers_retrained": 1,
+      "n_linear_total": 74,
+      "bcd_converged": true,
+      "bcd_sweeps": 1,
+      "lora_fitted": false
+    },
+    {
+      "mode": "ols_n2",
+      "label": "OLS  N=2 (BCD)",
+      "accuracy": 0.8578,
+      "loss": 0.4742,
+      "wall_s": 491.34,
+      "peak_mem_gb": 0.641,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 1,
+      "n_layers_retrained": 2,
+      "n_linear_total": 74,
+      "bcd_converged": false,
+      "bcd_sweeps": 1,
+      "lora_fitted": false
+    },
+    {
+      "mode": "ols_n4",
+      "label": "OLS  N=4 (BCD)",
+      "accuracy": 0.8727,
+      "loss": 0.4678,
+      "wall_s": 908.75,
+      "peak_mem_gb": 0.831,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 1,
+      "n_layers_retrained": 4,
+      "n_linear_total": 74,
+      "bcd_converged": false,
+      "bcd_sweeps": 1,
+      "lora_fitted": false
+    }
+  ]
+}

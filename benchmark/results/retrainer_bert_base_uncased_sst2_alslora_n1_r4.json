@@ -1,0 +1,36 @@
+{
+  "model": "bert-base-uncased",
+  "task": "sst2",
+  "modes_run": [
+    "pretrained",
+    "als_lora_n1_r4"
+  ],
+  "pretrained_accuracy": 0.5091743119266054,
+  "results": [
+    {
+      "mode": "pretrained",
+      "label": "Pretrained (no FT)",
+      "accuracy": 0.5092,
+      "loss": 0.6914,
+      "wall_s": 0,
+      "peak_mem_gb": 0.0,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 0
+    },
+    {
+      "mode": "als_lora_n1_r4",
+      "label": "ALS-LoRA N=1 r=4",
+      "accuracy": 0.7511,
+      "loss": 0.5452,
+      "wall_s": 159.64,
+      "peak_mem_gb": 0.593,
+      "n_trainable": 3080,
+      "n_total": 109483778,
+      "n_data_passes": 5,
+      "n_layers_als": 1,
+      "lora_rank": 4,
+      "als_sweeps": 5
+    }
+  ]
+}

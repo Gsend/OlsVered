@@ -1,0 +1,197 @@
+
+[0;36m══ mode=ols_n1  bcd=gauss_seidel  tag=n1 ══[0m
+[0;32m[INFO][0m  18:04:19  Command: bash /root/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n1 --bcd-mode gauss_seidel --tag n1
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : ols_n1
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes ols_n1 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag n1
+
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : ols_n1
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 4685.98it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.seq_relationship.bias                  | UNEXPECTED | 
+cls.seq_relationship.weight                | UNEXPECTED | 
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+cls.predictions.bias                       | UNEXPECTED | 
+classifier.bias                            | MISSING    | 
+classifier.weight                          | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+  bert-base-uncased  (109.5M parameters)
+
+Preparing data ...
+  Loading dataset 'sst2' ...
+Generating train split:   0%|          | 0/67349 [00:00<?, ? examples/s]Generating train split: 100%|██████████| 67349/67349 [00:00<00:00, 1223703.57 examples/s]
+Generating validation split:   0%|          | 0/872 [00:00<?, ? examples/s]Generating validation split: 100%|██████████| 872/872 [00:00<00:00, 211156.00 examples/s]
+Generating test split:   0%|          | 0/1821 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 1821/1821 [00:00<00:00, 390262.51 examples/s]
+Tokenising:   0%|          | 0/67349 [00:00<?, ? examples/s]Tokenising:   3%|▎         | 2000/67349 [00:00<00:03, 17385.00 examples/s]Tokenising:   7%|▋         | 5000/67349 [00:00<00:05, 11373.63 examples/s]Tokenising:  13%|█▎        | 9000/67349 [00:00<00:03, 15137.96 examples/s]Tokenising:  18%|█▊        | 12000/67349 [00:00<00:03, 16763.03 examples/s]Tokenising:  22%|██▏       | 15000/67349 [00:00<00:02, 17808.73 examples/s]Tokenising:  25%|██▌       | 17000/67349 [00:01<00:02, 18227.11 examples/s]Tokenising:  30%|██▉       | 20000/67349 [00:01<00:02, 18761.53 examples/s]Tokenising:  34%|███▍      | 23000/67349 [00:01<00:02, 19148.74 examples/s]Tokenising:  39%|███▊      | 26000/67349 [00:01<00:02, 19438.98 examples/s]Tokenising:  43%|████▎     | 29000/67349 [00:01<00:02, 15014.27 examples/s]Tokenising:  46%|████▌     | 31000/67349 [00:01<00:02, 15905.66 examples/s]Tokenising:  52%|█████▏    | 35000/67349 [00:02<00:01, 17340.22 examples/s]Tokenising:  55%|█████▍    | 37000/67349 [00:02<00:01, 17861.57 examples/s]Tokenising:  61%|██████    | 41000/67349 [00:02<00:01, 18789.06 examples/s]Tokenising:  67%|██████▋   | 45000/67349 [00:02<00:01, 19247.13 examples/s]Tokenising:  73%|███████▎  | 49000/67349 [00:02<00:01, 15571.53 examples/s]Tokenising:  79%|███████▊  | 53000/67349 [00:03<00:00, 16849.08 examples/s]Tokenising:  85%|████████▍ | 57000/67349 [00:03<00:00, 17791.18 examples/s]Tokenising:  89%|████████▉ | 60000/67349 [00:03<00:00, 18322.36 examples/s]Tokenising:  95%|█████████▌| 64000/67349 [00:03<00:00, 18967.22 examples/s]Tokenising: 100%|██████████| 67349/67349 [00:03<00:00, 19395.84 examples/s]Tokenising: 100%|██████████| 67349/67349 [00:03<00:00, 17634.69 examples/s]
+Tokenising:   0%|          | 0/872 [00:00<?, ? examples/s]Tokenising: 100%|██████████| 872/872 [00:00<00:00, 17110.88 examples/s]
+Tokenising:   0%|          | 0/1821 [00:00<?, ? examples/s]Tokenising: 100%|██████████| 1821/1821 [00:00<00:00, 18188.90 examples/s]Tokenising: 100%|██████████| 1821/1821 [00:00<00:00, 17608.70 examples/s]
+  Train: 67349 samples  |  Eval: 872 samples
+
+Evaluating pretrained model (zero-shot baseline) ...
+  Pretrained accuracy: 50.92%  loss: 0.6914
+
+────────────────────────────────────────────────────────────
+[OLS  N=1]
+[OlsSMLayerRetrainer] Retraining 1 layer(s)  [bcd=gauss_seidel residual]:
+  [0] Linear(768 → 2, bias)
+  Retraining 1 of 74 Linear layers  (pure OLS)
+[OlsSMLayerRetrainer] Single-layer solve done. max|ΔW| = 6.47e+01  (n=67349)
+  → accuracy=0.7511  loss=0.5452  time=165s  mem=0.59GB  sweeps=1
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_n1.json)
+
+════════════════════════════════════════════════════════════════════════════════
+  MODE                        ACC     LOSS   TIME(s)   MEM(GB)   PARAMS(M)   PASSES
+────────────────────────────────────────────────────────────────────────────────
+  Pretrained (no FT)       50.92%   0.6914         0     0.000        0.0M      0.0
+  OLS  N=1                 75.11%   0.5452       165     0.593        0.0M      1.0
+════════════════════════════════════════════════════════════════════════════════
+
+  Best accuracy : OLS  N=1  (75.11%)
+  Fastest within 1pp of best: OLS  N=1  (165s, 75.11%)
+
+  Plot saved: /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2.png
+  Scatter plot saved: /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_scatter.png
+
+Done. Results in: /root/OlsVered/benchmark/results
+[0;32m[INFO][0m  ols_n1 completed in 198s  →  retrainer_bert_base_uncased_sst2_n1.json
+
+[0;36m══ mode=ols_n2  bcd=gauss_seidel  tag=n2_gs ══[0m
+[0;32m[INFO][0m  18:07:37  Command: bash /root/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n2 --bcd-mode gauss_seidel --tag n2_gs
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : ols_n2
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes ols_n2 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag n2_gs
+
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : ols_n2
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 3978.51it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.seq_relationship.bias                  | UNEXPECTED | 
+cls.seq_relationship.weight                | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.predictions.bias                       | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+classifier.weight                          | MISSING    | 
+classifier.bias                            | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+  bert-base-uncased  (109.5M parameters)
+
+Preparing data ...
+  Loading dataset 'sst2' ...
+  Train: 67349 samples  |  Eval: 872 samples
+
+Evaluating pretrained model (zero-shot baseline) ...
+  Pretrained accuracy: 50.92%  loss: 0.6914
+
+────────────────────────────────────────────────────────────
+[OLS  N=2 (BCD)]
+  [BCD stability]  N=2  → capped at max_sweeps=1  (warm-start + 1 sweep, avoids sweep-2+ divergence)
+  [lambda scaling]  N=2  λ=1e-04 → 3.00e-02
+[OlsSMLayerRetrainer] Retraining 2 layer(s)  [bcd=gauss_seidel full-replace]:
+  [0] Linear(768 → 768, bias)  → Tanh
+  [1] Linear(768 → 2, bias)
+  Retraining 2 of 74 Linear layers  (pure OLS)
+[BCD warm-start]  Pre-solving output layer (N=1 OLS) …
+[BCD final]  Output layer re-solved.  max|ΔW| = 9.53e+01
+[BCD warm-start]  done.  max|ΔW_last| = 9.53e+01
+[BCD sweep 1/1]  max|ΔW| = 6.87e+01  (L0:3.88e-01  L1:6.87e+01)
+  → accuracy=0.8567  loss=0.4866  time=506s  mem=0.61GB  sweeps=1
+  (results saved → /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_n2_gs.json)
+
+════════════════════════════════════════════════════════════════════════════════
+  MODE                        ACC     LOSS   TIME(s)   MEM(GB)   PARAMS(M)   PASSES
+────────────────────────────────────────────────────────────────────────────────
+  Pretrained (no FT)       50.92%   0.6914         0     0.000        0.0M      0.0
+  OLS  N=2 (BCD)           85.67%   0.4866       506     0.613        0.0M      1.0
+════════════════════════════════════════════════════════════════════════════════
+
+  Best accuracy : OLS  N=2 (BCD)  (85.67%)
+  Fastest within 1pp of best: OLS  N=2 (BCD)  (506s, 85.67%)
+
+  Plot saved: /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2.png
+  Scatter plot saved: /root/OlsVered/benchmark/results/retrainer_bert_base_uncased_sst2_scatter.png
+
+Done. Results in: /root/OlsVered/benchmark/results
+[0;32m[INFO][0m  ols_n2 completed in 525s  →  retrainer_bert_base_uncased_sst2_n2_gs.json
+
+[0;36m══ mode=ols_n4  bcd=gauss_seidel  tag=n4 ══[0m
+[0;32m[INFO][0m  18:16:22  Command: bash /root/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n4 --bcd-mode gauss_seidel --tag n4
+
+[0;36m══ GPU check ══[0m
+[0;32m[INFO][0m  GPU: NVIDIA RTX A4500  (21.0 GB VRAM)
+
+[0;32m[INFO][0m  Model  : bert-base-uncased
+[0;32m[INFO][0m  Task   : sst2
+[0;32m[INFO][0m  Modes  : ols_n4
+[0;32m[INFO][0m  Command: cd '/root/OlsVered' && python3 benchmark/retrainer_benchmark.py --model bert-base-uncased --task sst2 --modes ols_n4 --batch-size 32 --epochs 1 --max-sweeps 5 --lambda-reg 1e-4 --bcd-mode gauss_seidel --seed 42 --tag n4
+
+======================================================================
+  OlsSM Retrainer Benchmark
+  Model  : bert-base-uncased
+  Task   : sst2
+  Modes  : ols_n4
+  Device : cuda  (NVIDIA RTX A4500)
+  Seed   : 42
+======================================================================
+
+Loading model and tokenizer ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 4562.07it/s]
+[1mBertForSequenceClassification LOAD REPORT[0m from: bert-base-uncased
+Key                                        | Status     | 
+-------------------------------------------+------------+-
+cls.predictions.transform.dense.bias       | UNEXPECTED | 
+cls.predictions.bias                       | UNEXPECTED | 
+cls.predictions.transform.dense.weight     | UNEXPECTED | 
+cls.seq_relationship.weight                | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.bias   | UNEXPECTED | 
+cls.seq_relationship.bias                  | UNEXPECTED | 
+cls.predictions.transform.LayerNorm.weight | UNEXPECTED | 
+classifier.bias                            | MISSING    | 
+classifier.weight                          | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.

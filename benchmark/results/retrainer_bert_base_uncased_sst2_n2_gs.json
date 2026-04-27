@@ -1,0 +1,38 @@
+{
+  "model": "bert-base-uncased",
+  "task": "sst2",
+  "modes_run": [
+    "pretrained",
+    "ols_n2"
+  ],
+  "pretrained_accuracy": 0.5091743119266054,
+  "results": [
+    {
+      "mode": "pretrained",
+      "label": "Pretrained (no FT)",
+      "accuracy": 0.5092,
+      "loss": 0.6914,
+      "wall_s": 0,
+      "peak_mem_gb": 0.0,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 0
+    },
+    {
+      "mode": "ols_n2",
+      "label": "OLS  N=2 (BCD)",
+      "accuracy": 0.8567,
+      "loss": 0.4866,
+      "wall_s": 505.92,
+      "peak_mem_gb": 0.613,
+      "n_trainable": 0,
+      "n_total": 109483778,
+      "n_data_passes": 1,
+      "n_layers_retrained": 2,
+      "n_linear_total": 74,
+      "bcd_converged": false,
+      "bcd_sweeps": 1,
+      "lora_fitted": false
+    }
+  ]
+}

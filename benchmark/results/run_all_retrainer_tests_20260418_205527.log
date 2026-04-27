@@ -1,0 +1,21 @@
+
+[0;36m══ mode=ols_n1  bcd=gauss_seidel  tag=n1 ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n1 --bcd-mode gauss_seidel --tag n1
+
+[0;36m══ mode=ols_n2  bcd=gauss_seidel  tag=n2_gs ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n2 --bcd-mode gauss_seidel --tag n2_gs
+
+[0;36m══ mode=ols_n4  bcd=gauss_seidel  tag=n4 ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_n4 --bcd-mode gauss_seidel --tag n4
+
+[0;36m══ mode=als_lora_n1_r4  bcd=gauss_seidel  tag=alslora_n1_r4 ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes als_lora_n1_r4 --bcd-mode gauss_seidel --tag alslora_n1_r4
+
+[0;36m══ mode=als_lora_n2_r4  bcd=gauss_seidel  tag=alslora_n2_r4 ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes als_lora_n2_r4 --bcd-mode gauss_seidel --tag alslora_n2_r4
+
+[0;36m══ mode=als_lora_n4_r4  bcd=gauss_seidel  tag=alslora_n4_r4 ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes als_lora_n4_r4 --bcd-mode gauss_seidel --tag alslora_n4_r4
+
+[0;36m══ mode=ols_lora_r4  bcd=gauss_seidel  tag=olslora_r4 ══[0m
+[0;32m[INFO][0m  20:55:27  Command: bash /sessions/blissful-quirky-wozniak/mnt/OlsVered/run_retrainer_benchmark.sh --model bert-base-uncased --task sst2 --seed 42 --no-setup --modes ols_lora_r4 --bcd-mode gauss_seidel --tag olslora_r4
