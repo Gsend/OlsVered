@@ -342,7 +342,7 @@ def make_classic_kfac(model):
     )
 
 OLSSM_LR          = 1.5e-2  # moderate lr boost: Cholesky κ² vs LU κ⁴ allows slightly larger steps
-OLSSM_DAMPING     = 5e-4    # lower damping: Cholesky handles near-singular matrices better than LU
+OLSSM_DAMPING     = 1e-3    # same as ClassicKFAC — 5e-4 caused divergence early in training
 OLSSM_CLIP        = 20.0    # looser clip: better-conditioned updates need less truncation
 
 def make_olssm_kfac(model):
@@ -369,8 +369,8 @@ def make_olssm_kfac(model):
         gamma=0.9,
     )
 
-VERED_LR          = 3e-2    # higher lr: κ¹ preconditioner is better conditioned → larger safe steps
-VERED_CLIP        = None    # no clip: natural gradients are well-scaled by construction
+VERED_LR          = 2e-2    # higher lr than Classic/OlsSM — backed off from 3e-2 which diverged
+VERED_CLIP        = 5.0     # clip re-added: early training gradients can still be large before R stabilises
 
 def make_vered_kfac(model):
     """QR on raw activations X directly.  Error ∝ κ(X)¹.
