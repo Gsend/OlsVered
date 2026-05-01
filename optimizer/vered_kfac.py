@@ -129,6 +129,7 @@ class VeredKFAC(torch.optim.Optimizer):
         max_out_dim: int = 0,
         augment_bias: bool = False,
         max_conv_rows: int = 512,
+        max_seq_rows: Optional[int] = None,
     ):
         logger.debug(
             "VeredKFAC init: factor_update_freq=%d  damping=%.2e  augment_bias=%s",
@@ -158,6 +159,7 @@ class VeredKFAC(torch.optim.Optimizer):
             max_out_dim=max_out_dim,
             augment_bias=augment_bias,
             max_conv_rows=max_conv_rows,
+            max_seq_rows=max_seq_rows,
         )
         self.hooks.enable()
 

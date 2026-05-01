@@ -105,6 +105,15 @@ class RawActivationHooks(GramMatrixEstimator):
         centred-covariance contamination the augmentation introduces.
     """
 
+    # Maximum number of token rows fed into the streaming TSQR when the input
+    # is a 3-D sequence tensor (B, T, d).  Mirrors KFACHooks._SEQ_SUBSAMPLE so
+    # the three K-FAC variants see the same sample budget per step on
+    # transformer Linear layers (KFAC-Reduce / "Reduce" approximation).
+    # Without this, BERT/SmallGPT layers feed B*T rows (e.g. 64*128 = 8192)
+    # into TSQR every step - 16x more work than KFACHooks does.
+    # Set to 0 to disable (use all rows).
+    _SEQ_SUBSAMPLE: int = 512
+
     def __init__(
         self,
         model: nn.Module,
@@ -112,11 +121,16 @@ class RawActivationHooks(GramMatrixEstimator):
         max_out_dim: int = 0,
         augment_bias: bool = False,
         max_conv_rows: int = 512,
+        max_seq_rows: Optional[int] = None,
     ):
         self.model = model
         self.damping = damping
         self.augment_bias = augment_bias
         self.max_conv_rows = max_conv_rows  # cap Conv2d patch rows per batch (0 = no cap)
+        # cap 3D-sequence rows per batch (None = use class default _SEQ_SUBSAMPLE,
+        # 0 = no cap)
+        self.max_seq_rows = (self._SEQ_SUBSAMPLE if max_seq_rows is None
+                              else max_seq_rows)
 
         self._handles: List[torch.utils.hooks.RemovableHook] = []
         self._enabled = False
@@ -315,6 +329,12 @@ class RawActivationHooks(GramMatrixEstimator):
                 x = x[idx]
         elif x.ndim > 2:
             x = x.reshape(-1, x.shape[-1])            # (B·T, d_in)
+            # KFAC-Reduce: subsample to cap leaf-QR rows for transformer Linear
+            # layers.  Same policy as KFACHooks._SEQ_SUBSAMPLE so Vered uses the
+            # same sample budget per step as Classic/OlsSM.
+            if self.max_seq_rows > 0 and x.shape[0] > self.max_seq_rows:
+                idx = torch.randperm(x.shape[0], device=x.device)[:self.max_seq_rows]
+                x = x[idx]
 
         # Bias augmentation: append column of ones so bias is handled implicitly
         if self.augment_bias and isinstance(module, nn.Linear) and module.bias is not None:
@@ -361,6 +381,10 @@ class RawActivationHooks(GramMatrixEstimator):
             delta = self._reshape_conv_grad(delta)    # (B·L, C_out)
         elif delta.ndim > 2:
             delta = delta.reshape(-1, delta.shape[-1])  # (B·T, d_out)
+            # KFAC-Reduce on output gradients - mirror the forward-hook subsample.
+            if self.max_seq_rows > 0 and delta.shape[0] > self.max_seq_rows:
+                idx = torch.randperm(delta.shape[0], device=delta.device)[:self.max_seq_rows]
+                delta = delta[idx]
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
