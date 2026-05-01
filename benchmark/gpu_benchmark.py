@@ -317,10 +317,15 @@ def run_mlp_benchmark(device, args):
         def forward(self, x):
             return self.net(x.view(x.size(0), -1))
 
+    # LR hierarchy under momentum=0.9:
+    #   ClassicKFAC : OlsSMKFAC : VeredKFAC = 1 : 1.5 : 2.25
+    # B=512 × factor_update_freq=20 = 10240 rows/window → safely > max layer
+    # width (2048), so VeredKFAC's TSQR p ≥ n requirement is satisfied.
     configs = [
-        dict(name="Adam",          B=128,  lr=1e-3,  kfac=False),
-        dict(name="ClassicKFAC",   B=512,  lr=5e-2,  kfac=True,  randomised=False),
-        dict(name="OlsSMKFAC",  B=512,  lr=3e-2,  kfac=True,  randomised=True),
+        dict(name="Adam",          B=128,  lr=1e-3,    kfac=False),
+        dict(name="ClassicKFAC",   B=512,  lr=7e-3,    kfac=True,  randomised=False),
+        dict(name="OlsSMKFAC",  B=512,  lr=1e-2,    kfac=True,  randomised=True),
+        dict(name="VeredKFAC",     B=512,  lr=1.5e-2,  kfac=True,  vered=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -340,6 +345,13 @@ def run_mlp_benchmark(device, args):
 
         if not cfg['kfac']:
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
+        elif cfg.get('vered'):
+            from optimizer.vered_kfac import VeredKFAC
+            # B=512 × freq=20 = 10240 rows/window  >>  max n_in (2048).
+            # max_out_dim=0: no layers excluded (all layers <= 2048 out).
+            opt = VeredKFAC(model, lr=cfg['lr'], damping=5e-3,
+                            factor_update_freq=20,
+                            momentum=0.9, grad_clip=10.0, gamma=0.7)
         elif cfg['randomised']:
             from optimizer.olssm_kfac import OlsSMKFAC
             # On GPU: decomp_update_freq=10 is fine (EVD is fast).
@@ -348,13 +360,13 @@ def run_mlp_benchmark(device, args):
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=5e-3,
                                factor_update_freq=20, decomp_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
-                               adaptive_rank_budget=256, momentum=0.0,
+                               adaptive_rank_budget=256, momentum=0.9,
                                grad_clip=10.0, gamma=0.99)
         else:
             from optimizer.classic_kfac import ClassicKFAC
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=5e-3,
                               factor_update_freq=10, decomp_update_freq=10,
-                              momentum=0.0, grad_clip=10.0, gamma=0.9)
+                              momentum=0.9, grad_clip=10.0, gamma=0.9)
 
         criterion  = nn.CrossEntropyLoss()
         # K-FAC: 100-step linear warmup (Gram matrices are uninitialized for
@@ -485,11 +497,11 @@ def run_bert_benchmark(device, args):
                             collate_fn=collator, num_workers=2)
 
     _lr_vered_bert = (args.lr_vered_bert
-                      if args.lr_vered_bert is not None else 3e-3)
+                      if args.lr_vered_bert is not None else 4.5e-3)
     configs = [
         dict(name="Adam",        B=32,  lr=2e-5,          kfac=False),
         dict(name="OlsSMKFAC",  B=512, lr=3e-3,          kfac=True, randomised=True),
-        dict(name="ClassicKFAC", B=512, lr=5e-3,          kfac=True, randomised=False),
+        dict(name="ClassicKFAC", B=512, lr=2e-3,          kfac=True, randomised=False),
         dict(name="VeredKFAC",   B=32,  lr=_lr_vered_bert, kfac=True, vered=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
@@ -780,10 +792,14 @@ def run_cifar_benchmark(device, args):
     # Empirically tuned on CIFAR-10: B=1024 + gamma=0.999 for OlsSMKFAC
     # gives 58.8% — beating Adam (57.9%).  Larger batch improves Gram matrix
     # quality; gamma=0.999 smooths over ~1000 update windows for stable curvature.
+    # LR hierarchy under momentum=0.9:
+    #   ClassicKFAC : OlsSMKFAC : VeredKFAC = 1 : 1.5 : 2.25
+    # B=1024 × factor_update_freq=20 = 20480 rows/window >> max n_in (3072) ✓
     configs = [
-        dict(name="Adam",         B=128,  lr=3e-4, kfac=False),
-        dict(name="ClassicKFAC",  B=512,  lr=3e-2, kfac=True, randomised=False),
-        dict(name="OlsSMKFAC", B=1024, lr=5e-3, kfac=True, randomised=True),
+        dict(name="Adam",         B=128,  lr=3e-4,   kfac=False),
+        dict(name="ClassicKFAC",  B=512,  lr=1.3e-3, kfac=True, randomised=False),
+        dict(name="OlsSMKFAC", B=1024, lr=2e-3,   kfac=True, randomised=True),
+        dict(name="VeredKFAC",    B=1024, lr=3e-3,   kfac=True, vered=True),
     ]
     configs = [c for c in configs if c["name"].lower() not in args.skip]
     if not configs:
@@ -803,13 +819,20 @@ def run_cifar_benchmark(device, args):
 
         if not cfg['kfac']:
             opt = torch.optim.Adam(model.parameters(), lr=cfg['lr'])
+        elif cfg.get('vered'):
+            from optimizer.vered_kfac import VeredKFAC
+            # B=1024 × freq=20 = 20480 rows  >>  max n_in (3072) ✓
+            # max_out_dim=0: all layers <= 2048 out, none excluded.
+            opt = VeredKFAC(model, lr=cfg['lr'], damping=5e-3,
+                            factor_update_freq=20,
+                            momentum=0.9, grad_clip=10.0, gamma=0.7)
         elif cfg['randomised']:
             from optimizer.olssm_kfac import OlsSMKFAC
             evd_freq = 20 if torch.cuda.is_available() else 50
             opt = OlsSMKFAC(model, lr=cfg['lr'], damping=5e-3,
                                factor_update_freq=20, decomp_update_freq=evd_freq,
                                adaptive=True, adaptive_min_n=256,
-                               adaptive_rank_budget=256, momentum=0.0,
+                               adaptive_rank_budget=256, momentum=0.9,
                                grad_clip=10.0, gamma=0.999)
         else:
             from optimizer.classic_kfac import ClassicKFAC
@@ -817,7 +840,7 @@ def run_cifar_benchmark(device, args):
             # less stable than EVD and crashed (14% accuracy drops) at 5e-3.
             opt = ClassicKFAC(model, lr=cfg['lr'], damping=1e-2,
                               factor_update_freq=20, decomp_update_freq=20,
-                              momentum=0.0, grad_clip=10.0, gamma=0.9)
+                              momentum=0.9, grad_clip=10.0, gamma=0.9)
 
         criterion = nn.CrossEntropyLoss()
         if cfg['kfac']:
@@ -1073,9 +1096,14 @@ def run_transformer_benchmark(device, args):
 
     vocab_size = tokenizer.vocab_size   # 50 257
 
+    # LR hierarchy (KFAC variants tolerate momentum differently):
+    #   ClassicKFAC : OlsSMKFAC : VeredKFAC = 1 : 1.5 : 2.25
+    # OlsSMKFAC default 8e-3 is the prior LR-sweep optimum (ppl=368).
+    # ClassicKFAC = OlsSMKFAC / 1.5 = 5.3e-3
+    # VeredKFAC   = OlsSMKFAC * 1.5 = 1.2e-2
     _lr_ols   = args.lr_ols_transformer   if args.lr_ols_transformer   is not None else 8e-3
-    _lr_cls   = args.lr_cls_transformer   if args.lr_cls_transformer   is not None else 8e-3
-    _lr_vered = args.lr_vered_transformer if args.lr_vered_transformer is not None else 1e-2
+    _lr_cls   = args.lr_cls_transformer   if args.lr_cls_transformer   is not None else 5.3e-3
+    _lr_vered = args.lr_vered_transformer if args.lr_vered_transformer is not None else 1.2e-2
     configs = [
         dict(name="Adam",        B=32, lr=3e-4,    kfac=False),
         dict(name="OlsSMKFAC",  B=64, lr=_lr_ols,  kfac=True, randomised=True),

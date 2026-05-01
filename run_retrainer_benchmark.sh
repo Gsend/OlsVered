@@ -76,6 +76,21 @@ USE_TMUX=false
 SESSION="retrainer_bench"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── Windows (Git Bash) compatibility ─────────────────────────────────────────
+if [[ -n "${WINDIR:-}" ]] || [[ "$OSTYPE" == msys* ]] || [[ "$OSTYPE" == cygwin* ]]; then
+    _VENV_SCRIPTS="Scripts"
+    # Cargo and MinGW64 are not on PATH by default in Git Bash; add them
+    export PATH="${HOME}/.cargo/bin:/c/msys64/mingw64/bin:${PATH}"
+    # Pre-generated pyo3 config avoids running the blocked build script on Windows
+    export PYO3_CONFIG_FILE="${SCRIPT_DIR}/pyo3-build-config.txt"
+    # Resolve a working Python for pre-activation use (venv creation)
+    _SYS_PYTHON="${HOME}/AppData/Local/Programs/Python/Python312/python.exe"
+    [[ -x "$_SYS_PYTHON" ]] || _SYS_PYTHON="python"
+else
+    _VENV_SCRIPTS="bin"
+    _SYS_PYTHON="python3"
+fi
+
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
@@ -120,11 +135,11 @@ if [[ "$RUN_SETUP" == true ]]; then
     if [[ -z "${VIRTUAL_ENV:-}" ]]; then
         if [[ ! -d "$VENV_DIR" ]]; then
             info "Creating virtual environment at .venv ..."
-            python3 -m venv "$VENV_DIR"
+            "$_SYS_PYTHON" -m venv "$VENV_DIR"
         fi
         info "Activating .venv ..."
         # shellcheck source=/dev/null
-        source "${VENV_DIR}/bin/activate"
+        source "${VENV_DIR}/${_VENV_SCRIPTS}/activate"
     else
         info "Using active virtual environment: ${VIRTUAL_ENV}"
         VENV_DIR="${VIRTUAL_ENV}"
@@ -170,7 +185,7 @@ if [[ "$RUN_SETUP" == true ]]; then
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --default-toolchain stable --no-modify-path
         # shellcheck source=/dev/null
-        source "${HOME}/.cargo/env"
+        source "${HOME}/.cargo/env" 2>/dev/null || export PATH="${HOME}/.cargo/bin:${PATH}"
     else
         info "Rust: $(rustc --version)"
     fi
@@ -188,6 +203,16 @@ if [[ "$RUN_SETUP" == true ]]; then
         info "olssm already installed (Rust backend active)."
     fi
 fi  # end RUN_SETUP
+
+# ── Ensure venv is active (needed when --no-setup skips activation) ───────────
+if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+    _DEFAULT_VENV="${SCRIPT_DIR}/.venv"
+    if [[ -d "${_DEFAULT_VENV}/${_VENV_SCRIPTS}" ]]; then
+        # shellcheck source=/dev/null
+        source "${_DEFAULT_VENV}/${_VENV_SCRIPTS}/activate" 2>/dev/null || \
+            export PATH="${_DEFAULT_VENV}/${_VENV_SCRIPTS}:${PATH}"
+    fi
+fi
 
 # ── GPU check ─────────────────────────────────────────────────────────────────
 section "GPU check"
@@ -219,7 +244,8 @@ if [[ "$MODEL" == *"large"* ]] && (( ${VRAM_INT:-0} < 16 )); then
 fi
 
 # ── Build Python command ──────────────────────────────────────────────────────
-PY_CMD="cd '${SCRIPT_DIR}' && python3 benchmark/retrainer_benchmark.py"
+# PYTHONUTF8=1 ensures Unicode output works correctly on Windows terminals
+PY_CMD="cd '${SCRIPT_DIR}' && PYTHONUTF8=1 python3 benchmark/retrainer_benchmark.py"
 PY_CMD+=" --model ${MODEL}"
 PY_CMD+=" --task ${TASK}"
 PY_CMD+=" --modes ${MODES}"
