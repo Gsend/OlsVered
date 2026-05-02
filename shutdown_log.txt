@@ -1,0 +1,253 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260502074527
+Username: DESKTOP-2L9ORSG\Admin
+RunAs User: DESKTOP-2L9ORSG\Admin
+Configuration Name: 
+Machine: DESKTOP-2L9ORSG (Microsoft Windows NT 10.0.26200.0)
+Host Application: powershell.exe -NoExit -ExecutionPolicy Bypass -File C:\Program Files\JetBrains\PyCharm 2026.1.1\plugins\terminal\shell-integrations\powershell\powershell-integration.ps1
+Process ID: 9076
+PSVersion: 5.1.26100.8115
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8115
+BuildVersion: 10.0.26100.8115
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Looking for events since: 05/01/2026 07:45:26
+
+======================================================================
+  Shutdown / restart events
+======================================================================
+
+Time                  Id Level       Provider                       Message
+----                  -- -----       --------                       -------
+5/2/2026 3:28:10 AM   41 Critical    Microsoft-Windows-Kernel-Power The system has rebooted without cleanly shutting down first. This error could be caused if
+                                                                    the system stopped responding, crashed, or lost power unexpectedly.
+5/2/2026 3:28:29 AM 6008 Error       EventLog                       The previous system shutdown at 3:09:40 AM on ‎5/‎2/‎2026 was unexpected.
+5/2/2026 3:28:29 AM 6005 Information EventLog                       The Event log service was started.
+
+
+
+======================================================================
+  Bug check (BSOD) events  -  EventLog 1001 from BugCheck source
+======================================================================
+PS>TerminatingError(Get-WinEvent): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: There is not an event provider on the localhost computer that matches "BugCheck"."
+  No BSOD events in window.
+
+======================================================================
+  Thermal events  -  Kernel-Processor-Power, ACPI thermal
+======================================================================
+
+Time                Id Level       Provider                                 Message
+----                -- -----       --------                                 -------
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 0 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 30
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 2 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 4 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 6 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 8 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 10 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 12 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 14 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 1 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 3 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 5 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 7 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 9 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 11 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:20 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 13 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 76
+                                                                            Minimum throttle percentage: 3
+5/2/2026 3:28:21 AM 55 Information Microsoft-Windows-Kernel-Processor-Power Processor 15 in group 0 exposes the following power management capabilities:
+
+                                                                            Idle state type: Micro Power Engine Plugin (11 state(s))
+
+                                                                            Performance state type: ACPI Collaborative Processor Performance Control
+                                                                            Nominal Frequency (MHz): 2611
+                                                                            Maximum performance percentage: 192
+                                                                            Minimum performance percentage: 61
+                                                                            Minimum throttle percentage: 3
+
+
+
+======================================================================
+  Other critical / error events in System log (top 30 by time)
+======================================================================
+
+Time                   Id Level    Provider                                   Message
+----                   -- -----    --------                                   -------
+5/2/2026 3:28:29 AM  1040 Error    Microsoft-Windows-TPM-WMI                  Pre-attestation health checks confirm a critical component has failed, and the
+                                                                              device is not expected to pass attestation.
+                                                                               Please see C:\WINDOWS\Logs\MeasuredBoot\0000000023-0000000000.json for detailed
+                                                                              information on what checks were made.
+5/2/2026 3:28:29 AM  6008 Error    EventLog                                   The previous system shutdown at 3:09:40 AM on ‎5/‎2/‎2026 was unexpected.
+5/2/2026 3:28:28 AM  1001 Error    Microsoft-Windows-WER-SystemErrorReporting ‏‏המחשב אותחל מחדש מבדיקת באגים.  בדיקת הבאגים היתה: 0x0000001e
+                                                                              (0xffffffffc000001d, 0xfffff806e18f1aef, 0x0000000000000001, 0xffffaa879690c080).
+                                                                              קובץ Dump נשמר ב: C:\WINDOWS\Minidump\050226-21890-01.dmp. מזהה דוח:
+                                                                              bf429474-f476-4db8-b680-1377864c3588.
+5/2/2026 3:28:10 AM    41 Critical Microsoft-Windows-Kernel-Power             The system has rebooted without cleanly shutting down first. This error could be
+                                                                              caused if the system stopped responding, crashed, or lost power unexpectedly.
+5/2/2026 3:28:10 AM   162 Error    volmgr                                     Dump file generation succeded.
+5/1/2026 9:51:42 PM    20 Error    Microsoft-Windows-WindowsUpdateClient      ‏‏ההתקנה נכשלה: Windows נכשל בהתקנת העדכון הבא עם שגיאה 0x80073D02:
+                                                                              9WZDNCRD29V9-MICROSOFT.MICROSOFTOFFICEHUB.
+5/1/2026 1:39:11 PM 10010 Error    Microsoft-Windows-DistributedCOM           The server {338B40F9-9D68-4B53-A793-6B9AA0C5F63B} did not register with DCOM
+                                                                              within the required timeout.
+
+
+
+======================================================================
+  Application Error / Hang events  -  python.exe in particular
+======================================================================
+
+======================================================================
+  Resource-Exhaustion / low-memory events
+======================================================================
+PS>TerminatingError(Get-WinEvent): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: No events were found that match the specified selection criteria."
+  None found.
+
+======================================================================
+  Windows Update reboot signals
+======================================================================
+PS>TerminatingError(Get-WinEvent): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: There is not an event provider on the localhost computer that matches "Microsoft-Windows-USO Core"."
+  None found.
+
+======================================================================
+  Battery / power events
+======================================================================
+
+Time                 Id Level       Provider                       Message
+----                 -- -----       --------                       -------
+5/2/2026 3:28:10 AM  41 Critical    Microsoft-Windows-Kernel-Power The system has rebooted without cleanly shutting down first. This error could be caused if
+                                                                   the system stopped responding, crashed, or lost power unexpectedly.
+5/2/2026 3:28:21 AM 521 Information Microsoft-Windows-Kernel-Power Active battery count change.
+5/2/2026 3:28:21 AM 521 Information Microsoft-Windows-Kernel-Power Active battery count change.
+
+
+
+======================================================================
+  NVIDIA / display driver events
+======================================================================
+**********************
+Windows PowerShell transcript end
+End time: 20260502074529
+**********************
