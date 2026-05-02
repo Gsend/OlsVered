@@ -125,13 +125,17 @@ MOMENTUM_GRID = [0.0, 0.9]
 # share the LR range 1.2e-2 to 8e-2 so cross-momentum comparison at the
 # same LR is possible at those points.
 LR_GRIDS: Dict[float, List[float]] = {
-    # Momentum=0.0: range shifted up ~5x. Prior runs with mom=0 used LRs in
-    # the 0.05-0.2 range; this grid covers below and above that.
-    0.0: [1.2e-2, 2e-2, 3e-2, 5e-2, 8e-2, 1.5e-1, 2.5e-1, 4e-1],
-    # Momentum=0.9: centered on the deployment optimum (~ 8e-3 from prior
-    # transformer LR sweep). Top end 8e-2 is 10x optimum, low end 3e-3 is
-    # well below it, so the frontier should fall comfortably inside.
-    0.9: [3e-3, 5e-3, 8e-3, 1.2e-2, 2e-2, 3e-2, 5e-2, 8e-2],
+    # Momentum=0.0: extended DOWN with [1e-3, 3e-3, 5e-3, 8e-3] because with
+    # GRAD_CLIP=1000 (effectively unbounded), ClassicKFAC's max-stable LR
+    # collapses below 0.012.  Need lower probes to find Classic's true
+    # frontier so the kappa-scaling hierarchy can be measured directly
+    # ("Classic stable up to LR=X, OlsSM up to Y, Vered up to Z").
+    # Stuck/diverged probes early-exit fast (~30s) so the extra 4 LRs
+    # cost ~30 min total for the full Phase 1 sweep.
+    0.0: [1e-3, 3e-3, 5e-3, 8e-3, 1.2e-2, 2e-2, 3e-2, 5e-2, 8e-2, 1.5e-1],
+    # Momentum=0.9: also extended down with [1e-3, 2e-3] to find Classic's
+    # mom=0.9 frontier with no clipping.
+    0.9: [1e-3, 2e-3, 3e-3, 5e-3, 8e-3, 1.2e-2, 2e-2, 3e-2, 5e-2, 8e-2],
 }
 
 # Phase 2 picks ONE momentum to do its 5000-step convergence runs at.
@@ -162,16 +166,40 @@ EMB_LR = 5e-4
 # ln(50257)~10.8 of uniform-random output.  An absolute threshold would
 # trigger on step 1 of every probe regardless of optimizer behaviour.
 #
-# Instead, divergence is detected from:
+# Instead, divergence is detected from any of three signals:
 #   1. NaN/inf in the loss     (catastrophic numerical failure)
 #   2. Sustained drift upward  (loss > RELATIVE_DIVERGE_FACTOR * running min
 #                                for RELATIVE_DIVERGE_WINDOW consecutive steps)
+#   3. Val perplexity pinned   (val_ppl >= PPL_CAP for PPL_CAP_CONSECUTIVE
+#                                evaluations - means val cross-entropy > 9.21,
+#                                worse than uniform random).
 #
-# The running-min tracking starts after WARMUP_STEPS_BEFORE_CHECK so the
-# huge step-1 loss doesn't anchor it.
-WARMUP_STEPS_BEFORE_CHECK = 10
-RELATIVE_DIVERGE_FACTOR   = 5.0
-RELATIVE_DIVERGE_WINDOW   = 50
+# WARMUP_STEPS_BEFORE_CHECK must be past the LR scheduler's warmup (200 steps)
+# so running_min isn't anchored to artificially-low warmup-phase losses.
+# Without this, a probe that briefly trains during low-LR warmup then explodes
+# at full LR slips past detection because its 'min' is the warmup low.
+WARMUP_STEPS_BEFORE_CHECK = 250
+RELATIVE_DIVERGE_FACTOR   = 2.0     # 2x running_min means training is going backwards
+RELATIVE_DIVERGE_WINDOW   = 30      # consecutive steps required (~7s of training)
+
+# Val-perplexity cap detector.  evaluate_ppl() returns min(exp(loss), 9999)
+# so a value at the cap means val loss > ln(9999) ~= 9.21 - worse than the
+# 10.83 of uniform-random output.
+#
+# Trigger requires BOTH:
+#   1. PPL_CAP_CONSECUTIVE evals in a row at cap
+#   2. running_min_loss > PPL_CAP_LOSS_FLOOR  (training didn't progress past
+#      "barely better than random uniform")
+#
+# The dual condition prevents false positives on slow-but-honest training
+# (e.g., very tight grad_clip).  At grad_clip=0.3 the natural gradient is
+# heavily throttled, so val_ppl can sit at the cap for several evals while
+# train loss legitimately drops to ~10.5 - that's slow training, not
+# divergence.  Only flag as diverged if loss is also stuck near random init.
+PPL_CAP                 = 9990.0
+PPL_CAP_CONSECUTIVE     = 10        # ~10 evals = ~1500 steps - effectively only
+                                     # triggers on probes that NEVER break the cap
+PPL_CAP_LOSS_FLOOR      = 9.5       # train loss must also be near-random
 
 # Targets used for time-to-ppl reporting in Phase 2.
 PPL_TARGETS = [1000.0, 500.0, 400.0]
@@ -267,9 +295,11 @@ def evaluate_ppl(model: nn.Module, loader, device: torch.device,
 # ============================================================================
 
 def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
-                    damping: float, momentum: float) -> Tuple[torch.optim.Optimizer,
-                                                               torch.optim.Optimizer,
-                                                               List[int]]:
+                    damping: float, momentum: float,
+                    grad_clip: Optional[float] = None,
+                    ) -> Tuple[torch.optim.Optimizer,
+                               torch.optim.Optimizer,
+                               List[int]]:
     """Build (kfac_opt, emb_opt, kfac_covered_param_ids) for a variant.
 
     kfac_opt   - second-order optimizer for Linear layers with out_dim <= KFAC_MAX_DIM
@@ -298,6 +328,21 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
 
     emb_opt = torch.optim.AdamW(other_params, lr=EMB_LR, weight_decay=0.01)
 
+    # IMPORTANT: grad_clip set HIGH (1000) across all three variants for the
+    # stability benchmark.  Rationale:
+    #   - Equal across variants -> isolates the inversion method (was 10/20/20
+    #     in gpu_benchmark.py, a confound for stability comparison).
+    #   - Set to 1000 (not 10) because at clip=10 all three variants produce
+    #     essentially identical natural-gradient updates - the clip dominates
+    #     and hides the kappa(X)^1 vs kappa(X)^2 vs kappa(X)^4 numerical
+    #     differences this benchmark is meant to expose.
+    #   - 1000 is effectively unbounded for typical operation but still catches
+    #     genuine NaN-equivalent meltdowns.
+    # Expect: at high LR / low damping, ClassicKFAC may genuinely diverge while
+    # OlsSM/Vered survive - which is the actual stability hierarchy in action.
+    DEFAULT_GRAD_CLIP = 100.0
+    GRAD_CLIP = grad_clip if grad_clip is not None else DEFAULT_GRAD_CLIP
+
     if variant == "OlsSMKFAC":
         from optimizer.olssm_kfac import OlsSMKFAC
         # decomp_update_freq=20 matches ClassicKFAC for apples-to-apples
@@ -309,7 +354,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20, decomp_update_freq=20,
             adaptive=True, adaptive_min_n=4096,
-            momentum=momentum, grad_clip=20.0, gamma=0.5,
+            momentum=momentum, grad_clip=GRAD_CLIP, gamma=0.5,
             max_gram_dim=KFAC_MAX_DIM,
         )
     elif variant == "ClassicKFAC":
@@ -317,7 +362,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         kfac_opt = ClassicKFAC(
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20, decomp_update_freq=20,
-            momentum=momentum, grad_clip=10.0, gamma=0.5,
+            momentum=momentum, grad_clip=GRAD_CLIP, gamma=0.5,
             max_gram_dim=KFAC_MAX_DIM,
         )
     elif variant == "VeredKFAC":
@@ -325,7 +370,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         kfac_opt = VeredKFAC(
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20,
-            momentum=momentum, grad_clip=20.0, gamma=0.7,
+            momentum=momentum, grad_clip=GRAD_CLIP, gamma=0.5,
             max_out_dim=KFAC_MAX_DIM,
         )
     else:
@@ -456,6 +501,7 @@ def run_probe(
     condition_log_every: int = 100,
     eval_every_samples: int = 10_000,
     print_progress: bool = True,
+    grad_clip: Optional[float] = None,    # override the optimizer's clip
 ) -> Dict:
     """Run a single (variant, lr, damping, momentum) probe; return metrics + status.
 
@@ -469,7 +515,8 @@ def run_probe(
     """
     torch.manual_seed(seed)
     model = SmallGPT(vocab_size=vocab_size).to(device)
-    kfac_opt, emb_opt, _ = make_optimizers(variant, model, kfac_lr, damping, momentum)
+    kfac_opt, emb_opt, _ = make_optimizers(variant, model, kfac_lr, damping,
+                                            momentum, grad_clip=grad_clip)
 
     # Schedulers - linear warmup (200 steps) then cosine decay over the rest.
     # Same shape as gpu_benchmark.py transformer task.
@@ -588,6 +635,26 @@ def run_probe(
                       f"loss={loss_val:.4f}  val_ppl={ppl:7.1f}  "
                       f"wall={wall/60:.1f}m")
 
+            # Val-perplexity cap detector: requires BOTH val_ppl pinned at
+            # cap for PPL_CAP_CONSECUTIVE consecutive evals AND
+            # running_min_loss above PPL_CAP_LOSS_FLOOR (i.e. training never
+            # progressed past "barely better than random uniform").
+            # The dual check avoids false-positives on slow-but-honest
+            # training (e.g. very tight grad_clip).
+            if (len(val_ppls) >= PPL_CAP_CONSECUTIVE
+                    and all(p >= PPL_CAP for p in val_ppls[-PPL_CAP_CONSECUTIVE:])
+                    and math.isfinite(running_min_loss)
+                    and running_min_loss > PPL_CAP_LOSS_FLOOR):
+                status = "diverged"
+                diverge_step = step
+                diverge_loss = loss_val
+                if print_progress:
+                    print(f"      [pinned]   step={step:5d}  val_ppl pinned at "
+                          f">={PPL_CAP:.0f} for {PPL_CAP_CONSECUTIVE} evals "
+                          f"with running_min_loss={running_min_loss:.2f} "
+                          f"(model never progressed past random)")
+                break
+
     # Final eval if we survived
     final_ppl: Optional[float] = None
     if status == "stable":
@@ -614,6 +681,7 @@ def run_probe(
         "kfac_lr":         kfac_lr,
         "damping":         damping,
         "momentum":        momentum,
+        "grad_clip":       grad_clip,
         "status":          status,
         "diverge_step":    diverge_step,
         "diverge_loss":    diverge_loss,
