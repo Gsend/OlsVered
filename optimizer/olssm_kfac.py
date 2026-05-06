@@ -347,14 +347,51 @@ class OlsSMKFAC(torch.optim.Optimizer):
         """
         mat = (mat + mat.T) * 0.5          # enforce exact symmetry
         n   = mat.shape[0]
-        mat_damp = mat + self.damping * torch.eye(n, device=mat.device, dtype=mat.dtype)
+        eye_n = torch.eye(n, device=mat.device, dtype=mat.dtype)
+
+        # Sanity check: if the input has any NaN/inf, all downstream paths
+        # will fail.  Return identity-Cholesky immediately - this step's
+        # update for this layer will be effectively SGD-like, and the
+        # divergence detector upstream will catch the broken model state.
+        if not torch.isfinite(mat).all():
+            logger.warning(
+                "Cholesky input has non-finite values; returning identity "
+                "(this layer's update reduces to SGD this step)"
+            )
+            return torch.linalg.cholesky(eye_n * (1.0 + self.damping))
+
+        # Progressive retry: try Cholesky with increasing damping multipliers.
+        # Some Gram matrices accumulated during chaotic training have small
+        # negative eigenvalues from numerical drift in the streaming sums;
+        # the original "10x damping" retry isn't enough when high grad_clip
+        # lets large gradients flow through.
+        for damp_mult in (1.0, 10.0, 100.0, 1000.0):
+            mat_damp = mat + (self.damping * damp_mult) * eye_n
+            try:
+                return torch.linalg.cholesky(mat_damp)
+            except torch.linalg.LinAlgError:
+                continue
+
+        # Final fallback: project to nearest-PSD via eigendecomposition.
+        # Wrapped in try/except so even a pathological eigh failure cannot
+        # crash the whole benchmark - identity-Cholesky becomes the
+        # last-ditch fallback.
         try:
-            return torch.linalg.cholesky(mat_damp)
-        except torch.linalg.LinAlgError:
-            # Gram matrix barely PSD (e.g. early training, rank-deficient batch).
-            # Add 9× extra damping (total 10×) and retry — always succeeds then.
-            mat_damp.diagonal().add_(self.damping * 9.0)
-            return torch.linalg.cholesky(mat_damp)
+            logger.warning(
+                "Cholesky failed at all damping multipliers; falling back to "
+                "EVD-based PSD projection (matrix may be severely ill-conditioned)"
+            )
+            eigvals, eigvecs = torch.linalg.eigh(mat)
+            eigvals_clamped = eigvals.clamp(min=max(self.damping, 1e-8))
+            mat_psd = (eigvecs * eigvals_clamped) @ eigvecs.T
+            mat_psd = (mat_psd + mat_psd.T) * 0.5
+            return torch.linalg.cholesky(mat_psd)
+        except (torch.linalg.LinAlgError, RuntimeError) as e:
+            logger.warning(
+                f"EVD-based fallback also failed ({type(e).__name__}: {e}); "
+                f"returning identity Cholesky as last resort"
+            )
+            return torch.linalg.cholesky(eye_n * (1.0 + self.damping))
 
     # ------------------------------------------------------------------
 

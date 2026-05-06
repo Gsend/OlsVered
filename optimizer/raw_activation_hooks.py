@@ -112,7 +112,14 @@ class RawActivationHooks(GramMatrixEstimator):
     # Without this, BERT/SmallGPT layers feed B*T rows (e.g. 64*128 = 8192)
     # into TSQR every step - 16x more work than KFACHooks does.
     # Set to 0 to disable (use all rows).
-    _SEQ_SUBSAMPLE: int = 512
+    # Bumped from 512 to 2048 to satisfy TSQR's p>=n requirement on SmallGPT
+    # FFN layers (n_out=1024).  At 512 the first factor-update window had only
+    # 512 rows accumulated, less than the 1024-dim FFN, so the layer fell
+    # back to Classic K-FAC (silently, with a warning) for that window.  At
+    # 2048 there are always >= 2 layers worth of headroom even on transformer
+    # tasks with d_ff up to 2048.  Costs ~4x more rows per QR but eliminates
+    # the warning and lets Vered's preconditioning work from step 1.
+    _SEQ_SUBSAMPLE: int = 2048
 
     def __init__(
         self,

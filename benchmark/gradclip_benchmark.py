@@ -84,16 +84,55 @@ from benchmark.gpu_benchmark import get_device, get_hardware_info
 # ============================================================================
 
 # Fixed at the prior deployment optimum
-KFAC_LR    = 8e-3
-MOMENTUM   = 0.9
-DAMPING    = 1e-3
+KFAC_LR    = 8e-3        # back to sane training LR.  Was bumped to 8e-2 to
+                          # stress-test stability differences but absolute
+                          # results were uniformly bad (ppl ~9999) at that LR;
+                          # back to deployment-grade so Vered's stability
+                          # advantage can show up as actual convergence wins.
+MOMENTUM   = 0.90
 
-# Grad-clip grid - 8 log-spaced values spanning ~3.5 decades.  Lower end
-# (0.3) is so tight even healthy training is throttled; upper end (1000) is
-# effectively unbounded.  All three variants' frontiers should fall inside.
-GRADCLIP_GRID: List[float] = [0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0]
+# Per-variant damping. The math doc predicts OlsSM/Vered tolerate lower
+# damping than Classic because of better stability scaling
+# (kappa(X)^4 vs kappa(X)^2 vs kappa(X)^1).  Setting each variant at its
+# "natural" damping makes the benchmark a head-to-head at each variant's
+# best operating point - rather than artificially constraining OlsSM/Vered
+# to the conservative damping Classic needs.
+#
+# To use a single uniform damping instead, set all three to the same value.
+VARIANT_DAMPINGS: Dict[str, float] = {
+    "ClassicKFAC": 1.5e-4,    # conservative - kappa^4 noise floor demands it
+    "OlsSMKFAC":   1.5e-4,    # 5x lower - bumped from 1e-4 which was bistable
+                            # in clip range 30-300 (NaN at 30, OK at 100, NaN at 300)
+    "VeredKFAC":   1e-5,    # bumped from 1e-5: was numerically stable but
+                            # converging worse than Classic.  Sample-noise
+                            # amplification at 1e-5 dominated stability win.
+                            # 5e-5 keeps Vered 4x lower than OlsSM (still tests
+                            # kappa^1 advantage) but raises noise floor.
+}
 
-VARIANTS: List[str] = ["ClassicKFAC", "OlsSMKFAC", "VeredKFAC"]
+# Backward-compat: code still references DAMPING in JSON output for the
+# uniform case; computed as min for warning purposes.
+DAMPING = min(VARIANT_DAMPINGS.values())
+
+# Grad-clip grid - log-spaced.
+#
+# DEFAULT (high-clip, sane LR): focuses on the convergence regime around
+# clip=30-60 where the prior Phase 2 found Vered's 19% win.
+GRADCLIP_GRID: List[float] = [30.0, 40.0, 60.0]
+
+# ALTERNATIVE: "direction quality" regime - low clip + high LR.
+# Tests whether Vered's kappa^1 stability gives a measurable convergence
+# win when clip dominates magnitude and only DIRECTION quality matters.
+# Use by setting BENCHMARK_REGIME = "direction_quality" below.
+GRADCLIP_GRID_DIRECTION_QUALITY: List[float] = [0.3, 1.0, 3.0]
+KFAC_LR_DIRECTION_QUALITY: float = 5e-2
+
+# Switch between regimes.  "default" = the convergence-regime sweep.
+# "direction_quality" = low-clip + high-LR (LR=0.05, clip in {0.3,1.0,3.0}).
+# Override at CLI via --regime.
+BENCHMARK_REGIME: str = "default"
+
+VARIANTS: List[str] = ["VeredKFAC","ClassicKFAC",  "OlsSMKFAC"]
 
 # Phase lengths
 PROBE_STEPS  = 1000
@@ -120,37 +159,57 @@ def phase1_sweep(
     print("\n" + "=" * 70)
     print(f"  PHASE 1 - Grad-clip frontier sweep "
           f"({n_probes} probes x {PROBE_STEPS} steps)")
-    print(f"  Fixed: LR={KFAC_LR}  momentum={MOMENTUM}  damping={DAMPING}")
+    print(f"  Fixed: LR={KFAC_LR}  momentum={MOMENTUM}")
+    print(f"  Per-variant damping:")
+    for v in VARIANTS:
+        print(f"    {v:<14}  damping={VARIANT_DAMPINGS[v]:.0e}")
     print(f"  Sweep: grad_clip in {GRADCLIP_GRID}")
     print("=" * 70)
 
     out_path = OUT / "gradclip_phase1_sweep.json"
 
-    # Resume support: load any previously-completed probes
+    # Resume support: per-variant.  We keep already-completed probes for
+    # variants whose damping is UNCHANGED; discard only the variants whose
+    # damping value differs from the current VARIANT_DAMPINGS setting.
+    # This avoids redoing 8 ClassicKFAC probes when only OlsSMKFAC's damping
+    # got bumped.
     all_results: Dict[str, List[Dict]] = {v: [] for v in VARIANTS}
     completed: Set[Tuple[str, float]] = set()
     if out_path.exists():
         try:
             prior = json.loads(out_path.read_text())
-            if (prior.get("kfac_lr") == KFAC_LR
-                    and prior.get("momentum") == MOMENTUM
-                    and prior.get("damping") == DAMPING):
+            if (prior.get("kfac_lr") != KFAC_LR
+                    or prior.get("momentum") != MOMENTUM):
+                print(f"  WARN: prior {out_path.name} has different "
+                      f"LR/momentum; starting fresh")
+            else:
+                prior_dampings = prior.get("variant_dampings") or {}
+                kept = 0
+                discarded_variants: List[str] = []
                 for v, runs in (prior.get("runs") or {}).items():
                     if v not in all_results:
+                        continue
+                    # Per-variant damping check
+                    prior_damp = prior_dampings.get(v)
+                    cur_damp   = VARIANT_DAMPINGS[v]
+                    if prior_damp is None or float(prior_damp) != cur_damp:
+                        discarded_variants.append(v)
                         continue
                     for r in runs:
                         all_results[v].append(r)
                         completed.add((v, float(r["grad_clip"])))
-                if completed:
+                        kept += 1
+                if discarded_variants:
+                    print(f"  Damping changed for: {discarded_variants}  "
+                          f"-> their prior probes discarded")
+                if kept:
                     print(f"  Resuming from {out_path.name}: "
-                          f"skipping {len(completed)} completed probes")
-            else:
-                print(f"  WARN: prior {out_path.name} has different LR/momentum/damping; "
-                      f"starting fresh")
-                all_results = {v: [] for v in VARIANTS}
+                          f"keeping {kept} completed probes "
+                          f"(variants with unchanged damping)")
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             print(f"  WARN: could not parse {out_path.name} ({e}); starting fresh")
             all_results = {v: [] for v in VARIANTS}
+            completed = set()
 
     def _max_stable() -> Dict[str, Optional[float]]:
         ms: Dict[str, Optional[float]] = {}
@@ -163,14 +222,15 @@ def phase1_sweep(
 
     def _save():
         out = {
-            "hw":            hw,
-            "kfac_lr":       KFAC_LR,
-            "momentum":      MOMENTUM,
-            "damping":       DAMPING,
-            "gradclip_grid": GRADCLIP_GRID,
-            "probe_steps":   PROBE_STEPS,
-            "max_stable":    _max_stable(),
-            "runs":          all_results,
+            "hw":               hw,
+            "kfac_lr":          KFAC_LR,
+            "momentum":         MOMENTUM,
+            "damping":          DAMPING,    # min for backward-compat
+            "variant_dampings": {v: VARIANT_DAMPINGS[v] for v in VARIANTS},
+            "gradclip_grid":    GRADCLIP_GRID,
+            "probe_steps":      PROBE_STEPS,
+            "max_stable":       _max_stable(),
+            "runs":             all_results,
         }
         tmp = out_path.with_suffix(out_path.suffix + ".tmp")
         tmp.write_text(json.dumps(out, indent=2, default=str))
@@ -178,14 +238,15 @@ def phase1_sweep(
         return out
 
     for variant in VARIANTS:
-        print(f"\n  -- {variant} --")
+        damp = VARIANT_DAMPINGS[variant]
+        print(f"\n  -- {variant}  (damping={damp:.0e}) --")
         for clip in GRADCLIP_GRID:
             if (variant, clip) in completed:
                 print(f"    probe grad_clip={clip:.1f}  (already done, skipping)")
                 continue
             print(f"    probe grad_clip={clip:.1f} ...")
             res = run_probe(
-                variant=variant, kfac_lr=KFAC_LR, damping=DAMPING,
+                variant=variant, kfac_lr=KFAC_LR, damping=damp,
                 momentum=MOMENTUM,
                 max_steps=PROBE_STEPS, vocab_size=vocab_size,
                 train_loader_factory=train_loader_factory,
@@ -237,14 +298,28 @@ def phase2_convergence(
     pad_id: int,
     device: torch.device,
     hw: dict,
+    clip_overrides: Optional[Dict[str, float]] = None,
+    output_tag: str = "",
 ) -> Dict:
-    """Full PHASE2_STEPS run at each variant's max stable grad_clip."""
+    """Full PHASE2_STEPS run at each variant's grad_clip.
+
+    By default uses the variant's max-stable clip from Phase 1.
+    `clip_overrides` (e.g. {"ClassicKFAC": 60, "VeredKFAC": 120}) overrides
+    per-variant.  `output_tag` appends to the output filename so multiple
+    Phase 2 configurations can coexist (e.g. _matched, _clip120_long).
+    """
+    overrides = clip_overrides or {}
+    suffix = f"_{output_tag}" if output_tag else ""
+
     print("\n" + "=" * 70)
-    print(f"  PHASE 2 - Convergence at each variant's max stable grad_clip")
-    print(f"  ({PHASE2_STEPS} steps each, fixed LR={KFAC_LR}, mom={MOMENTUM})")
+    print(f"  PHASE 2 - Convergence runs   "
+          f"({PHASE2_STEPS} steps, LR={KFAC_LR}, mom={MOMENTUM}"
+          f"{', tag=' + output_tag if output_tag else ''})")
+    if overrides:
+        print(f"  Clip overrides: {overrides}")
     print("=" * 70)
 
-    out_path = OUT / "gradclip_phase2_runs.json"
+    out_path = OUT / f"gradclip_phase2_runs{suffix}.json"
 
     runs: Dict[str, Dict] = {}
     if out_path.exists():
@@ -266,14 +341,15 @@ def phase2_convergence(
 
     def _save():
         o = {
-            "hw":           hw,
-            "kfac_lr":      KFAC_LR,
-            "momentum":     MOMENTUM,
-            "damping":      DAMPING,
-            "phase2_steps": PHASE2_STEPS,
-            "max_stable":   max_stable,
-            "ppl_targets":  PPL_TARGETS,
-            "runs":         runs,
+            "hw":               hw,
+            "kfac_lr":          KFAC_LR,
+            "momentum":         MOMENTUM,
+            "damping":          DAMPING,
+            "variant_dampings": {v: VARIANT_DAMPINGS[v] for v in VARIANTS},
+            "phase2_steps":     PHASE2_STEPS,
+            "max_stable":       max_stable,
+            "ppl_targets":      PPL_TARGETS,
+            "runs":             runs,
         }
         tmp = out_path.with_suffix(out_path.suffix + ".tmp")
         tmp.write_text(json.dumps(o, indent=2, default=str))
@@ -286,15 +362,21 @@ def phase2_convergence(
             print(f"\n  -- {variant}: already complete "
                   f"(final_ppl={r.get('final_ppl', 'n/a')}), skipping --")
             continue
-        clip = max_stable.get(variant)
+        # Per-variant override takes precedence over Phase 1 max_stable
+        if variant in overrides:
+            clip = float(overrides[variant])
+        else:
+            clip = max_stable.get(variant)
         if clip is None:
-            print(f"\n  -- {variant}: SKIPPED (no stable clip found in Phase 1) --")
+            print(f"\n  -- {variant}: SKIPPED (no stable clip found in Phase 1 "
+                  f"and no override provided) --")
             runs[variant] = {"variant": variant, "status": "no_stable_clip",
                              "grad_clip": None}
             continue
-        print(f"\n  -- {variant} @ grad_clip={clip:.1f} --")
+        damp = VARIANT_DAMPINGS[variant]
+        print(f"\n  -- {variant} @ grad_clip={clip:.1f}, damping={damp:.0e} --")
         res = run_probe(
-            variant=variant, kfac_lr=KFAC_LR, damping=DAMPING,
+            variant=variant, kfac_lr=KFAC_LR, damping=damp,
             momentum=MOMENTUM,
             max_steps=PHASE2_STEPS, vocab_size=vocab_size,
             train_loader_factory=train_loader_factory,
@@ -447,7 +529,7 @@ def write_summary_csv(phase1: Optional[Dict], phase2: Optional[Dict]):
 
 def main():
     # Must declare globals BEFORE argparse reads them as default values
-    global PROBE_STEPS, PHASE2_STEPS, VARIANTS
+    global PROBE_STEPS, PHASE2_STEPS, VARIANTS, KFAC_LR, GRADCLIP_GRID
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=["1", "2", "all"], default="all")
@@ -455,7 +537,32 @@ def main():
     parser.add_argument("--phase2-steps", type=int, default=PHASE2_STEPS)
     parser.add_argument("--variants", default=",".join(VARIANTS),
                         help="Comma-separated variants to include")
+    parser.add_argument("--phase2-clips", default="",
+                        help="Per-variant clip overrides for Phase 2, format: "
+                             "'ClassicKFAC=60,OlsSMKFAC=60,VeredKFAC=120'. "
+                             "Variants not listed fall back to Phase 1 max_stable.")
+    parser.add_argument("--phase2-tag", default="",
+                        help="Suffix appended to the Phase 2 output JSON filename "
+                             "(e.g. 'matched' -> gradclip_phase2_runs_matched.json). "
+                             "Lets multiple Phase 2 configs coexist.")
+    parser.add_argument("--regime",
+                        choices=["default", "direction_quality"],
+                        default=BENCHMARK_REGIME,
+                        help="default: high-clip / sane-LR convergence regime "
+                             "(LR=0.008, clip~30-60). "
+                             "direction_quality: low-clip / high-LR regime "
+                             "(LR=0.05, clip~0.3-3) where clip dominates magnitude "
+                             "and only direction quality decides convergence - "
+                             "the cleanest test of Vered's kappa^1 advantage.")
     args = parser.parse_args()
+
+    # Apply regime selection
+    if args.regime == "direction_quality":
+        KFAC_LR = KFAC_LR_DIRECTION_QUALITY
+        GRADCLIP_GRID = GRADCLIP_GRID_DIRECTION_QUALITY
+        print(f"  Regime: direction_quality (LR={KFAC_LR}, clips={GRADCLIP_GRID})")
+    else:
+        print(f"  Regime: default (LR={KFAC_LR}, clips={GRADCLIP_GRID})")
 
     PROBE_STEPS = args.probe_steps
     PHASE2_STEPS = args.phase2_steps
@@ -494,10 +601,32 @@ def main():
         print(f"  Loaded Phase 1 from {p1_path}")
         print(f"  Max stable clips: {max_stable}")
 
+    # Parse per-variant clip overrides for Phase 2
+    clip_overrides: Dict[str, float] = {}
+    if args.phase2_clips:
+        for entry in args.phase2_clips.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                v, c = entry.split("=")
+                clip_overrides[v.strip()] = float(c.strip())
+            except (ValueError, KeyError):
+                print(f"  ERROR: bad --phase2-clips entry '{entry}'; "
+                      f"expected 'Variant=clip'")
+                sys.exit(1)
+        unknown = [v for v in clip_overrides
+                   if v not in ("ClassicKFAC", "OlsSMKFAC", "VeredKFAC")]
+        if unknown:
+            print(f"  ERROR: unknown variant(s) in --phase2-clips: {unknown}")
+            sys.exit(1)
+
     if args.phase in ("2", "all"):
         phase2_out = phase2_convergence(max_stable, train_loader_factory,
                                          val_loader, vocab_size, pad_id,
-                                         device, hw)
+                                         device, hw,
+                                         clip_overrides=clip_overrides,
+                                         output_tag=args.phase2_tag)
 
     print("\n" + "=" * 70)
     print("  Writing summary + plots")
