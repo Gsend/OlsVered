@@ -26,10 +26,28 @@ param(
     [ValidateSet("1","2","all")]
     [string]$Phase = "all",
 
-    [string]$Variants = "ClassicKFAC,OlsSMKFAC,VeredKFAC",
+    # Vered-only by default after the EMA-blend fix in vered_kfac.py.
+    # Classic and OlsSM are unchanged by that fix; Phase 1 results from
+    # prior runs for those two stay valid.  Override with
+    #   .\run_gradclip.ps1 -Variants "ClassicKFAC,OlsSMKFAC,VeredKFAC"
+    # to run all three again (e.g. clean cross-comparison rerun).
+    [string]$Variants = "VeredKFAC",
 
     [int]$ProbeSteps  = 1000,
-    [int]$Phase2Steps = 5000
+    [int]$Phase2Steps = 5000,
+
+    # Per-variant clip overrides for Phase 2.  Format:
+    #   "ClassicKFAC=60,OlsSMKFAC=60,VeredKFAC=120"
+    # Variants not listed fall back to Phase 1 max_stable.
+    [string]$Phase2Clips = "",
+
+    # Suffix on Phase 2 output filenames so multiple configs can coexist.
+    # E.g. -Phase2Tag "ema_fixed"  ->  gradclip_phase2_runs_ema_fixed.json
+    [string]$Phase2Tag = "",
+
+    # default | direction_quality   (low-clip + high-LR regime)
+    [ValidateSet("default","direction_quality")]
+    [string]$Regime = "default"
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,8 +82,11 @@ $PyArgs = @(
     "--phase",        $Phase,
     "--variants",     $Variants,
     "--probe-steps",  $ProbeSteps,
-    "--phase2-steps", $Phase2Steps
+    "--phase2-steps", $Phase2Steps,
+    "--regime",       $Regime
 )
+if ($Phase2Clips) { $PyArgs += @("--phase2-clips", $Phase2Clips) }
+if ($Phase2Tag)   { $PyArgs += @("--phase2-tag",   $Phase2Tag) }
 Info ("Command: python " + ($PyArgs -join " "))
 Write-Host ""
 

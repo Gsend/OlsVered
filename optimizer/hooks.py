@@ -180,7 +180,12 @@ class KFACHooks(GramMatrixEstimator):
     # unbiased because n_A / n_G track the actual row count that was used.
     # For BERT (B=512, seq_len=128 → 65 536 rows) this is a 128× speedup on
     # the hook outer products, which were the dominant cost (~1 500 ms/step).
-    _SEQ_SUBSAMPLE: int = 512
+    #
+    # Bumped from 512 to 2048 to match RawActivationHooks._SEQ_SUBSAMPLE so
+    # Classic/OlsSM and Vered use the same sample budget per step.  Without
+    # this match, Vered would have 4x more activation rows per Gram estimate
+    # than Classic/OlsSM, confounding the inversion-method comparison.
+    _SEQ_SUBSAMPLE: int = 2048
 
     def _forward_hook(
         self,

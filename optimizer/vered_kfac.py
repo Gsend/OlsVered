@@ -224,15 +224,39 @@ class VeredKFAC(torch.optim.Optimizer):
                 )
             clean[module] = (R_X, R_G)
 
-        # Optional EMA blending
+        # Optional EMA blending — augmented-QR (exact) instead of linear-on-R.
+        #
+        # The naive blend `γ·R_old + (1-γ)·R_new` is NOT a valid R factor of
+        # the blended Gram: cross-terms γ(1-γ)·(R_old^T R_new + R_new^T R_old)
+        # contaminate the implied Gram by 5-20× relative error at typical
+        # gamma values (verified in tests/test_kfac_equivalence.py:
+        # test_ema_blend_approximation_error).  This was the bottleneck
+        # masking VeredKFAC's kappa^1 stability advantage in training.
+        #
+        # Exact blend: stack [sqrt(gamma)·R_old; sqrt(1-gamma)·R_new] and
+        # re-QR. The resulting R satisfies R^T R = gamma·A_old + (1-gamma)·A_new
+        # exactly — no cross-term contamination.
         if self.gamma > 0.0 and self._factors:
+            import math
+            sqrt_g  = math.sqrt(self.gamma)
+            sqrt_1g = math.sqrt(1.0 - self.gamma)
             blended: Dict[nn.Module, Tuple[torch.Tensor, torch.Tensor]] = {}
             for module, (R_X_new, R_G_new) in clean.items():
                 if module in self._factors:
                     R_X_old, R_G_old = self._factors[module]
+                    # Exact augmented-QR blend for both factors
+                    def _blend(R_old, R_new):
+                        aug = torch.cat(
+                            [sqrt_g * R_old, sqrt_1g * R_new], dim=0
+                        )
+                        _, R_b = torch.linalg.qr(aug, mode="reduced")
+                        # Positive-diagonal sign normalisation
+                        diag_signs = torch.sign(torch.diagonal(R_b))
+                        diag_signs[diag_signs == 0] = 1.0
+                        return R_b * diag_signs.unsqueeze(1)
                     blended[module] = (
-                        self.gamma * R_X_old + (1.0 - self.gamma) * R_X_new,
-                        self.gamma * R_G_old + (1.0 - self.gamma) * R_G_new,
+                        _blend(R_X_old, R_X_new),
+                        _blend(R_G_old, R_G_new),
                     )
                 else:
                     blended[module] = (R_X_new, R_G_new)

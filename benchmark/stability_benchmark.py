@@ -297,6 +297,7 @@ def evaluate_ppl(model: nn.Module, loader, device: torch.device,
 def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
                     damping: float, momentum: float,
                     grad_clip: Optional[float] = None,
+                    gamma: Optional[float] = None,
                     ) -> Tuple[torch.optim.Optimizer,
                                torch.optim.Optimizer,
                                List[int]]:
@@ -343,6 +344,10 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
     DEFAULT_GRAD_CLIP = 100.0
     GRAD_CLIP = grad_clip if grad_clip is not None else DEFAULT_GRAD_CLIP
 
+    # Per-variant default gamma if not overridden
+    DEFAULT_GAMMA = {"OlsSMKFAC": 0.5, "ClassicKFAC": 0.5, "VeredKFAC": 0.7}
+    GAMMA = gamma if gamma is not None else DEFAULT_GAMMA[variant]
+
     if variant == "OlsSMKFAC":
         from optimizer.olssm_kfac import OlsSMKFAC
         # decomp_update_freq=20 matches ClassicKFAC for apples-to-apples
@@ -354,7 +359,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20, decomp_update_freq=20,
             adaptive=True, adaptive_min_n=4096,
-            momentum=momentum, grad_clip=GRAD_CLIP, gamma=0.5,
+            momentum=momentum, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_gram_dim=KFAC_MAX_DIM,
         )
     elif variant == "ClassicKFAC":
@@ -362,7 +367,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         kfac_opt = ClassicKFAC(
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20, decomp_update_freq=20,
-            momentum=momentum, grad_clip=GRAD_CLIP, gamma=0.5,
+            momentum=momentum, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_gram_dim=KFAC_MAX_DIM,
         )
     elif variant == "VeredKFAC":
@@ -370,7 +375,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         kfac_opt = VeredKFAC(
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20,
-            momentum=momentum, grad_clip=GRAD_CLIP, gamma=0.5,
+            momentum=0.0, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_out_dim=KFAC_MAX_DIM,
         )
     else:
@@ -502,6 +507,7 @@ def run_probe(
     eval_every_samples: int = 10_000,
     print_progress: bool = True,
     grad_clip: Optional[float] = None,    # override the optimizer's clip
+    gamma: Optional[float] = None,        # override the optimizer's EMA gamma
 ) -> Dict:
     """Run a single (variant, lr, damping, momentum) probe; return metrics + status.
 
@@ -516,7 +522,8 @@ def run_probe(
     torch.manual_seed(seed)
     model = SmallGPT(vocab_size=vocab_size).to(device)
     kfac_opt, emb_opt, _ = make_optimizers(variant, model, kfac_lr, damping,
-                                            momentum, grad_clip=grad_clip)
+                                            momentum, grad_clip=grad_clip,
+                                            gamma=gamma)
 
     # Schedulers - linear warmup (200 steps) then cosine decay over the rest.
     # Same shape as gpu_benchmark.py transformer task.

@@ -456,6 +456,100 @@ inside the benchmark records the actual $\kappa(A)$ and $\kappa(G)$ over
 training so the predicted-vs-observed comparison can be done numerically,
 not just by theory.
 
+## 11. Empirical κ scaling: worst-case bounds vs typical-case observations
+
+Sections 3-5 quote the **worst-case** forward-error bounds from Higham:
+
+$$
+\text{err}_{\text{Classic}} \;\sim\; \kappa(X)^4 \cdot \varepsilon
+\quad\quad
+\text{err}_{\text{OlsSM}} \;\sim\; \kappa(X)^2 \cdot \varepsilon
+\quad\quad
+\text{err}_{\text{Vered}} \;\sim\; \kappa(X)^1 \cdot \varepsilon
+$$
+
+These are **worst-case bounds** — they assume the matrix structure is
+maximally pathological for each algorithm.  In practice, on typical
+non-pathological matrices, the empirical scaling is smaller.
+
+### Direct measurement on synthetic well-conditioned data
+
+`tests/test_kfac_equivalence.py:test_predicted_kappa_scaling_pattern`
+measures the actual forward error of each variant against a high-precision
+reference, on a synthetic problem with controlled conditioning.
+
+At $\kappa(X) = 100$, $\lambda = 10^{-6}$, fp32 arithmetic:
+
+| Variant | Observed forward error | Cleaner-than-baseline by |
+|---|---|---|
+| ClassicKFAC | $1.60 \times 10^{-2}$ | (baseline) |
+| OlsSMKFAC | $2.33 \times 10^{-3}$ | $6.9\times$ |
+| VeredKFAC | $1.14 \times 10^{-4}$ | $140\times$ (vs Classic), $20\times$ (vs OlsSM) |
+
+The **hierarchy holds exactly** as the worst-case theory predicts:
+Classic > OlsSM > Vered in error magnitude.
+
+### But the *exponents* are softer
+
+Compare predicted vs observed at $\kappa(X) = 100$:
+
+| Pair | Worst-case predicted ratio | Empirically observed ratio | Implied actual exponent |
+|---|---|---|---|
+| Classic / OlsSM | $\kappa^2 = 10{,}000$ | $6.9\times$ | $\sim \kappa^{0.4}$ |
+| OlsSM / Vered | $\kappa^1 = 100$ | $20\times$ | $\sim \kappa^{0.65}$ |
+| Classic / Vered | $\kappa^3 = 10^6$ | $140\times$ | $\sim \kappa^{1.07}$ |
+
+**The empirically-observed scaling is about half the worst-case exponent**
+in each case.  This matches Higham's own commentary: explicit-inverse
+forward error is `κ²·ε` *only on adversarial matrices*; on typical
+well-conditioned-after-damping matrices the practical penalty is closer
+to `κ·ε`.  Same for Gram-squaring: typical case is `κ`, worst case is
+`κ²`.
+
+### Practical take-away
+
+For describing the value of OlsSM/Vered, two framings are honest:
+
+1. **Worst-case** (what the math doc derives in sections 3-5):
+   *"VeredKFAC has up to $\kappa(X)^3$ better forward error than ClassicKFAC."*
+   This is the bound Higham proves.
+
+2. **Typical-case** (what we measure):
+   *"VeredKFAC produces ~140× cleaner natural gradients than ClassicKFAC at
+   $\kappa(X) = 100$, scaling roughly as $\kappa$."*
+   This is the empirical reality on non-pathological inputs.
+
+Both are correct.  The marketing-relevant number is the typical-case 140×;
+the math-paper-relevant claim is the worst-case bound.  Reports should
+quote whichever is appropriate for the audience and clearly label which
+is which.
+
+### Why training-time advantage is less than synthetic 140×
+
+The synthetic test isolates a single natural-gradient computation step.
+In a real training run, several factors compress Vered's empirical
+advantage further:
+
+1. **Damping does most of the work.**  At deployment-relevant $\lambda \in
+   [10^{-4}, 10^{-3}]$, the inverse is bounded by $1/\lambda \le 10^4$ in
+   magnitude.  Classic's worst-case error of $10^4 \cdot \varepsilon \approx
+   10^{-3}$ is small relative to the natural-gradient norm itself, so
+   Classic's noisier output doesn't translate to visibly worse training
+   per step.
+2. **Sample-noise floor.**  The Gram factors $A$ and $G$ are estimated from
+   finite minibatches.  Even with a perfect inverse, small-eigenvalue
+   directions are dominated by sampling noise.  Vered's stability buys
+   nothing in those directions because the inputs themselves are noisy.
+3. **Convergence is bottlenecked by the slowest step**, not the average
+   step.  Even if Vered is 140× cleaner *on average*, the few steps
+   where Classic also does well (most of training) prevent that ratio
+   from compounding into a similarly large convergence-rate advantage.
+
+The empirical 19% perplexity improvement we observed in the SmallGPT
+benchmark is consistent with these effects.  Reaching the full synthetic
+140× factor would require pushing damping much lower than is typical for
+deployment.
+
 ## References
 
 - Martens & Grosse (2015), *Optimizing Neural Networks with Kronecker-

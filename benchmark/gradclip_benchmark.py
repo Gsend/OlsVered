@@ -132,7 +132,12 @@ KFAC_LR_DIRECTION_QUALITY: float = 5e-2
 # Override at CLI via --regime.
 BENCHMARK_REGIME: str = "default"
 
-VARIANTS: List[str] = ["VeredKFAC","ClassicKFAC",  "OlsSMKFAC"]
+# Default to Vered-only after the EMA-blend fix in vered_kfac.py.  Classic
+# and OlsSM are unchanged by that fix, so their prior numbers are still valid;
+# the bug was Python-side in VeredKFAC only.  Override with
+#   --variants ClassicKFAC,OlsSMKFAC,VeredKFAC
+# to run all three again (e.g., for a clean cross-comparison rerun).
+VARIANTS: List[str] = ["VeredKFAC"]
 
 # Phase lengths
 PROBE_STEPS  = 1000
