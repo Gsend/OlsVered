@@ -375,7 +375,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         kfac_opt = VeredKFAC(
             model, lr=kfac_lr, damping=damping,
             factor_update_freq=20,
-            momentum=0.0, grad_clip=GRAD_CLIP, gamma=GAMMA,
+            momentum=momentum, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_out_dim=KFAC_MAX_DIM,
         )
     else:
@@ -508,6 +508,7 @@ def run_probe(
     print_progress: bool = True,
     grad_clip: Optional[float] = None,    # override the optimizer's clip
     gamma: Optional[float] = None,        # override the optimizer's EMA gamma
+    lr_schedule: str = "cosine_max_steps",  # see scheduler block below
 ) -> Dict:
     """Run a single (variant, lr, damping, momentum) probe; return metrics + status.
 
@@ -525,18 +526,113 @@ def run_probe(
                                             momentum, grad_clip=grad_clip,
                                             gamma=gamma)
 
-    # Schedulers - linear warmup (200 steps) then cosine decay over the rest.
-    # Same shape as gpu_benchmark.py transformer task.
+    if print_progress:
+        # Dump every parameter that could affect the trajectory.  Added as
+        # part of the 2026-05-12 regression investigation (post-fix screen
+        # cells were ~2x worse than the historical reference at the same
+        # step); comparing this block against the historical JSON's "config"
+        # field is the fastest way to spot which knob drifted.
+        n_params = sum(p.numel() for p in model.parameters())
+        bs = getattr(val_loader, "batch_size", None)
+        try:
+            sample_x, _ = next(iter(val_loader))
+            seq_len = int(sample_x.size(1))
+        except Exception:
+            seq_len = None
+        print()
+        print("  ----- run_probe parameters -----")
+        print(f"    variant:              {variant}")
+        print(f"    kfac_lr (arg):        {kfac_lr}")
+        print(f"    damping (arg):        {damping}")
+        print(f"    momentum (arg):       {momentum}")
+        print(f"    gamma (arg):          {gamma!r}   "
+              f"(None -> DEFAULT_GAMMA[{variant}])")
+        print(f"    grad_clip (arg):      {grad_clip!r}   "
+              f"(None -> DEFAULT_GRAD_CLIP=100.0)")
+        print(f"    max_steps:            {max_steps}")
+        print(f"    seed:                 {seed}")
+        print(f"    vocab_size:           {vocab_size}")
+        print(f"    pad_id:               {pad_id}")
+        print(f"    EMB_LR (const):       {EMB_LR}")
+        print(f"    KFAC_MAX_DIM (const): {KFAC_MAX_DIM}")
+        print(f"    record_natgrad:       {record_natgrad}")
+        print(f"    record_condition:     {record_condition}   "
+              f"(log_every={condition_log_every})")
+        print(f"    eval_every_samples:   {eval_every_samples}")
+        print(f"    lr_schedule:          {lr_schedule!r}")
+        print(f"    data: batch_size={bs}  seq_len={seq_len}")
+        print(f"    model: {type(model).__name__}  params={n_params:,}")
+        print(f"    ----- optimizer state ({type(kfac_opt).__name__}) -----")
+        # Print every attribute we expect to find on a K-FAC variant.
+        # Missing ones print as "<absent>" so a silent default change is visible.
+        for attr in ("lr", "damping", "momentum", "gamma", "grad_clip",
+                     "factor_update_freq", "decomp_update_freq",
+                     "adaptive", "adaptive_min_n",
+                     "max_out_dim", "max_gram_dim"):
+            val = getattr(kfac_opt, attr, "<absent>")
+            # param_groups stash lr/momentum on torch optimizers; surface those too
+            if val == "<absent>" and hasattr(kfac_opt, "param_groups"):
+                pg = kfac_opt.param_groups[0] if kfac_opt.param_groups else {}
+                if attr in pg:
+                    val = f"{pg[attr]}  (from param_groups[0])"
+            print(f"      {attr:22s} {val}")
+        print(f"    ----- scheduler shape ({lr_schedule}) -----")
+        _warmup = 200
+        if lr_schedule == "cosine_max_steps":
+            _cosine = max(1, max_steps - _warmup)
+            print(f"      kfac:  warmup={_warmup}  cosine_T_max={_cosine}  "
+                  f"eta_min={kfac_lr * 0.0015:.3e}")
+            print(f"      emb:   cosine_T_max={max_steps}  "
+                  f"eta_min={EMB_LR * 0.01:.3e}")
+        else:  # constant_warmup
+            print(f"      kfac:  warmup={_warmup}  then constant at "
+                  f"{kfac_lr:.3e} for {max_steps - _warmup} steps")
+            print(f"      emb:   constant at {EMB_LR:.3e} "
+                  f"for all {max_steps} steps")
+        print(f"    --------------------------------")
+        print()
+
+    # Schedulers.  Two options:
+    #
+    #   "cosine_max_steps" (default, original behavior):
+    #     Linear warmup (200 steps) -> cosine decay over (max_steps - warmup)
+    #     -> eta_min = kfac_lr * 0.0015.  Mirrors gpu_benchmark.py's transformer
+    #     schedule.  PROBLEM for sweeps: the decay shape depends on max_steps,
+    #     so a "lr=8e-3" cell at max_steps=1000 trains very differently from
+    #     the same nominal lr at max_steps=5000 (the 1000-step run decays ~6x
+    #     faster).  The lr label stops being meaningful.
+    #
+    #   "constant_warmup":
+    #     Linear warmup (200 steps) -> constant kfac_lr forever.  Used by the
+    #     2D screen and single-cell diagnostic so a cell labeled lr=X actually
+    #     trains at LR=X after warmup, independent of max_steps.  Emb LR is
+    #     also held constant at EMB_LR (AdamW is robust enough at this LR
+    #     that warmup is not required).
     warmup = 200
-    cosine_steps = max(1, max_steps - warmup)
-    scheduler = torch.optim.lr_scheduler.SequentialLR(kfac_opt, schedulers=[
-        torch.optim.lr_scheduler.LinearLR(
-            kfac_opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
-        torch.optim.lr_scheduler.CosineAnnealingLR(
-            kfac_opt, T_max=cosine_steps, eta_min=kfac_lr * 0.0015),
-    ], milestones=[warmup])
-    emb_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        emb_opt, T_max=max_steps, eta_min=EMB_LR * 0.01)
+    if lr_schedule == "cosine_max_steps":
+        cosine_steps = max(1, max_steps - warmup)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(kfac_opt, schedulers=[
+            torch.optim.lr_scheduler.LinearLR(
+                kfac_opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+            torch.optim.lr_scheduler.CosineAnnealingLR(
+                kfac_opt, T_max=cosine_steps, eta_min=kfac_lr * 0.0015),
+        ], milestones=[warmup])
+        emb_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            emb_opt, T_max=max_steps, eta_min=EMB_LR * 0.01)
+    elif lr_schedule == "constant_warmup":
+        scheduler = torch.optim.lr_scheduler.SequentialLR(kfac_opt, schedulers=[
+            torch.optim.lr_scheduler.LinearLR(
+                kfac_opt, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+            torch.optim.lr_scheduler.ConstantLR(
+                kfac_opt, factor=1.0, total_iters=max_steps),
+        ], milestones=[warmup])
+        emb_scheduler = torch.optim.lr_scheduler.ConstantLR(
+            emb_opt, factor=1.0, total_iters=max_steps)
+    else:
+        raise ValueError(
+            f"Unknown lr_schedule: {lr_schedule!r}.  "
+            f"Expected 'cosine_max_steps' or 'constant_warmup'."
+        )
 
     train_loader = train_loader_factory()
     data_iter = iter(train_loader)
