@@ -1,0 +1,15 @@
+{
+  "battery": "OPT5-feature-distill-random",
+  "exp_id": "e3",
+  "teacher_acc": 0.9922,
+  "random_init_acc": 0.098,
+  "student_acc": 0.9922,
+  "delta_vs_teacher": 0.0,
+  "per_layer_residuals": {
+    "fc3": 0.0005990948876035567,
+    "fc2": 0.000535255599419362,
+    "fc1": 0.0004950117157655209,
+    "conv2": 0.00022160029594940378,
+    "conv1": 0.00015410500395918043
+  }
+}

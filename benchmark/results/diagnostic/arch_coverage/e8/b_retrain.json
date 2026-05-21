@@ -1,0 +1,33 @@
+{
+  "battery": "B-retrain-probe-attn-opaque",
+  "exp_id": "e8",
+  "seed": 42,
+  "method": "kfac_a",
+  "random_init_acc": 0.44475,
+  "retrained_acc": 0.77425,
+  "delta": 0.3295,
+  "wall_s": 0.2334887981414795,
+  "fitted_layers": [
+    "b1.fc_out",
+    "b1.fc_in",
+    "b1.Wo"
+  ],
+  "unreachable_layers": [
+    "head",
+    "b1.Wv",
+    "b1.Wk",
+    "b1.Wq",
+    "b0.fc_out",
+    "b0.fc_in",
+    "b0.Wo",
+    "b0.Wv",
+    "b0.Wk",
+    "b0.Wq"
+  ],
+  "per_layer_residuals": {
+    "b1.fc_out": 0.7398955630484777,
+    "b1.fc_in": 0.3554849087823542,
+    "b1.Wo": 0.8660641643890951
+  },
+  "interpretation": "Only head + top-block {Wo, fc_in, fc_out} are reachable without inverting softmax attention. Q/K/V and the entire lower block stay random => attention is a label-retrain wall, analogous to max-pool in E3."
+}

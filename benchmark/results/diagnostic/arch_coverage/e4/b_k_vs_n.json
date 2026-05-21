@@ -1,0 +1,40 @@
+{
+  "battery": "B-K-vs-N",
+  "exp_id": "e4",
+  "seed": 42,
+  "random_init_mse": 798.2542625,
+  "combos": {
+    "naive_no_mom": {
+      "method": "naive",
+      "correct_target_mean": false,
+      "correct_target_cov": false,
+      "mse": 212.15574921875,
+      "delta": -586.09851328125,
+      "wall_s": 4.093501806259155
+    },
+    "naive_mom_match": {
+      "method": "naive",
+      "correct_target_mean": true,
+      "correct_target_cov": true,
+      "mse": 382.5202140625,
+      "delta": -415.7340484375,
+      "wall_s": 4.52421760559082
+    },
+    "kfac_a_no_mom": {
+      "method": "kfac_a",
+      "correct_target_mean": false,
+      "correct_target_cov": false,
+      "mse": 228.732851953125,
+      "delta": -569.521410546875,
+      "wall_s": 4.425323486328125
+    },
+    "kfac_a_mom_match": {
+      "method": "kfac_a",
+      "correct_target_mean": true,
+      "correct_target_cov": true,
+      "mse": 355.32778671875,
+      "delta": -442.92647578124996,
+      "wall_s": 4.687909126281738
+    }
+  }
+}

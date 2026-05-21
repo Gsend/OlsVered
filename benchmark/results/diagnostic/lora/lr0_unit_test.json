@@ -1,0 +1,23 @@
+{
+  "exp": "lr0",
+  "n": 1024,
+  "d_in": 64,
+  "d_out": 64,
+  "r_full": 64,
+  "ols_residual": 0.9670729949587532,
+  "metrics": {
+    "output": {
+      "rrr_residual": 0.9677196275143856,
+      "ols_residual": 0.9670729949587532,
+      "ratio": 1.0006686491702315,
+      "gate": "PASS"
+    },
+    "whitened": {
+      "rrr_residual": 0.9677196275143854,
+      "ols_residual": 0.9670729949587532,
+      "ratio": 1.0006686491702312,
+      "gate": "PASS"
+    }
+  },
+  "gate_C1": true
+}

@@ -1,0 +1,15 @@
+{
+  "battery": "B-train",
+  "exp_id": "e8",
+  "seed": 42,
+  "epochs": 20,
+  "trained_acc": 1.0,
+  "config": {
+    "vocab": 32,
+    "seq_len": 16,
+    "d_model": 64,
+    "n_heads": 4,
+    "d_ff": 128,
+    "depth": 2
+  }
+}

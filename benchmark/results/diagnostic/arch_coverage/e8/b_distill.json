@@ -1,0 +1,24 @@
+{
+  "battery": "B-distill-feature",
+  "exp_id": "e8",
+  "teacher_acc": 1.0,
+  "random_init_acc": 0.44475,
+  "student_acc": 1.0,
+  "delta_vs_teacher": 0.0,
+  "per_layer_residuals": {
+    "head": 0.0002714402212006625,
+    "b1.fc_out": 0.0007543664889215685,
+    "b1.fc_in": 0.000598269642661085,
+    "b1.Wo": 0.0004647844798291952,
+    "b1.Wv": 0.0008324117215485331,
+    "b1.Wk": 0.0012250230574878391,
+    "b1.Wq": 0.00116598560187963,
+    "b0.fc_out": 0.0012960023997206059,
+    "b0.fc_in": 0.0013862836007296736,
+    "b0.Wo": 0.0008240615827196091,
+    "b0.Wv": 0.0015707940587540818,
+    "b0.Wk": 0.0016494515747447593,
+    "b0.Wq": 0.001676806029755925
+  },
+  "note": "non-Linear params (embed, pos, LayerNorm affines) copied from teacher; only Linears OLS-fit."
+}

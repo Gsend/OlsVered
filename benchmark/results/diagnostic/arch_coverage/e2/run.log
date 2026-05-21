@@ -1,0 +1,353 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 555, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 525, in main
+    distill_result = b_distill(trained_model, loader_list, test_loader, device=device)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 145, in b_distill
+    res = retrain_via_target_prop(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 368, in retrain_via_target_prop
+    per_layer_info, _ = _one_iteration(
+                        ^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 133, in _one_iteration
+    captured = collect_activations(
+               ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\capture.py", line 346, in collect_activations
+    a_post = act(a_pre)
+             ^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\layers.py", line 28, in forward
+    return self.relu(self.norm(x))
+                     ^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\normalization.py", line 229, in forward
+    return F.layer_norm(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\functional.py", line 2935, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+RuntimeError: Expected all tensors to be on the same device, but got weight is on cuda:0, different from other tensors on cpu (when checking argument in method wrapper_CUDA__native_layer_norm)
+[E2] LNMLP-10L  device=cuda  n_samples=16384  hidden_dim=256
+[E2] loading MNIST...
+
+[E2] === B-train: training LNMLP-10L ===
+  [train] epoch  1/15  loss=0.3329  test_acc=0.9545
+  [train] epoch  2/15  loss=0.1563  test_acc=0.9625
+  [train] epoch  3/15  loss=0.1093  test_acc=0.9684
+  [train] epoch  4/15  loss=0.0890  test_acc=0.9704
+  [train] epoch  5/15  loss=0.0687  test_acc=0.9744
+  [train] epoch  6/15  loss=0.0523  test_acc=0.9783
+  [train] epoch  7/15  loss=0.0458  test_acc=0.9770
+  [train] epoch  8/15  loss=0.0339  test_acc=0.9800
+  [train] epoch  9/15  loss=0.0260  test_acc=0.9814
+  [train] epoch 10/15  loss=0.0180  test_acc=0.9808
+  [train] epoch 11/15  loss=0.0128  test_acc=0.9832
+  [train] epoch 12/15  loss=0.0075  test_acc=0.9844
+  [train] epoch 13/15  loss=0.0049  test_acc=0.9851
+  [train] epoch 14/15  loss=0.0032  test_acc=0.9852
+  [train] epoch 15/15  loss=0.0027  test_acc=0.9857
+  [train] total: 552.1s
+  [B-train] test_acc=0.9857  wall=559.6s  weights -> C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lnmlp_10l.pt
+  -> saved b_train.json
+
+[E2] === B-distill: self-distillation from trained model ===
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 555, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 525, in main
+    distill_result = b_distill(trained_model, loader_list, test_loader, device=device)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 145, in b_distill
+    res = retrain_via_target_prop(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 368, in retrain_via_target_prop
+    per_layer_info, _ = _one_iteration(
+                        ^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 190, in _one_iteration
+    a_hat = invert_layer(
+            ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\inversion.py", line 341, in invert_layer
+    
+  File "C:\Users\Admin\OlsVered\diagnostic\inversion.py", line 288, in invert_activation
+    # LayerNorm has parameters — move a_pre_forward to its device.
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\normalization.py", line 229, in forward
+    return F.layer_norm(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\functional.py", line 2935, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+RuntimeError: Expected all tensors to be on the same device, but got weight is on cuda:0, different from other tensors on cpu (when checking argument in method wrapper_CUDA__native_layer_norm)
+[E2] LNMLP-10L  device=cuda  n_samples=16384  hidden_dim=256
+[E2] loading MNIST...
+[E2] loading cached weights from C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lnmlp_10l.pt
+[E2] loaded; test_acc=0.9857
+
+[E2] === B-distill: self-distillation from trained model ===
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 555, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 525, in main
+    distill_result = b_distill(trained_model, loader_list, test_loader, device=device)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 145, in b_distill
+    res = retrain_via_target_prop(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 368, in retrain_via_target_prop
+    per_layer_info, _ = _one_iteration(
+                        ^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 268, in _one_iteration
+    prev_a_post_new = activation_after(a_pre_new)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\layers.py", line 28, in forward
+    return self.relu(self.norm(x))
+                     ^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\normalization.py", line 229, in forward
+    return F.layer_norm(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\functional.py", line 2935, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+RuntimeError: Expected all tensors to be on the same device, but got weight is on cuda:0, different from other tensors on cpu (when checking argument in method wrapper_CUDA__native_layer_norm)
+[E2] LNMLP-10L  device=cuda  n_samples=16384  hidden_dim=256
+[E2] loading MNIST...
+[E2] loading cached weights from C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lnmlp_10l.pt
+[E2] loaded; test_acc=0.9857
+
+[E2] === B-distill: self-distillation from trained model ===
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 555, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 525, in main
+    distill_result = b_distill(trained_model, loader_list, test_loader, device=device)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 145, in b_distill
+    res = retrain_via_target_prop(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 374, in retrain_via_target_prop
+    per_layer_info, _ = _one_iteration(
+                        ^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\target_prop_retrainer.py", line 270, in _one_iteration
+    prev_a_post_new = activation_after(
+                      ^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\layers.py", line 28, in forward
+    return self.relu(self.norm(x))
+                     ^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\normalization.py", line 229, in forward
+    return F.layer_norm(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\functional.py", line 2935, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+RuntimeError: expected scalar type Double but found Float
+[E2] LNMLP-10L  device=cuda  n_samples=16384  hidden_dim=256
+[E2] loading MNIST...
+[E2] loading cached weights from C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lnmlp_10l.pt
+[E2] loaded; test_acc=0.9857
+
+[E2] === B-distill: self-distillation from trained model ===
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 555, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 529, in main
+    retrain_rand_result = b_retrain_rand(
+                          ^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\arch_coverage\e2_lnmlp.py", line 185, in b_retrain_rand
+    info = gt_target_retrain(
+           ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\runners\phase1_gt_retrain.py", line 204, in gt_target_retrain
+    prev_a_post_new = activation_after(a_pre_new)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\diagnostic\layers.py", line 28, in forward
+    return self.relu(self.norm(x))
+                     ^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\modules\normalization.py", line 229, in forward
+    return F.layer_norm(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OlsVered\.venv\Lib\site-packages\torch\nn\functional.py", line 2935, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+RuntimeError: Expected all tensors to be on the same device, but got weight is on cuda:0, different from other tensors on cpu (when checking argument in method wrapper_CUDA__native_layer_norm)
+[E2] LNMLP-10L  device=cuda  n_samples=16384  hidden_dim=256
+[E2] loading MNIST...
+[E2] loading cached weights from C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lnmlp_10l.pt
+[E2] loaded; test_acc=0.9857
+
+[E2] === B-distill: self-distillation from trained model ===
+  [B-distill] test_acc=0.9712  wall=12.6s
+    fc1: residual=0.593
+    fc2: residual=0.619
+    fc3: residual=0.586
+    fc4: residual=0.548
+    fc5: residual=0.495
+    fc6: residual=0.445
+    fc7: residual=0.396
+    fc8: residual=0.335
+    fc9: residual=0.226
+    fc10: residual=0.0712
+  -> saved b_distill.json
+
+[E2] === B-retrain-rand: random init + GT labels, single pass ===
+  random-init test_acc=0.0943
+[E2] LNMLP-10L  device=cuda  n_samples=16384  hidden_dim=256
+[E2] loading MNIST...
+[E2] loading cached weights from C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lnmlp_10l.pt
+[E2] loaded; test_acc=0.9857
+
+[E2] === B-distill: self-distillation from trained model ===
+  [B-distill] test_acc=0.9712  wall=9.6s
+    fc1: residual=0.593
+    fc2: residual=0.619
+    fc3: residual=0.586
+    fc4: residual=0.548
+    fc5: residual=0.495
+    fc6: residual=0.445
+    fc7: residual=0.396
+    fc8: residual=0.335
+    fc9: residual=0.226
+    fc10: residual=0.0712
+  -> saved b_distill.json
+
+[E2] === B-retrain-rand: random init + GT labels, single pass ===
+  random-init test_acc=0.0943
+  [B-retrain-rand] test_acc=0.7403  delta=+0.6460  wall=12.9s
+    fc1: residual=0.583
+    fc2: residual=0.573
+    fc3: residual=0.533
+    fc4: residual=0.531
+    fc5: residual=0.516
+    fc6: residual=0.478
+    fc7: residual=0.481
+    fc8: residual=0.45
+    fc9: residual=0.328
+    fc10: residual=0.411
+  -> saved b_retrain_rand.json
+
+[E2] === B-residual-profile ===
+  layer        distill  retrain_rand
+  fc1            0.593         0.583
+  fc2            0.619         0.573
+  fc3            0.586         0.533
+  fc4            0.548         0.531
+  fc5            0.495         0.516
+  fc6            0.445         0.478
+  fc7            0.396         0.481
+  fc8            0.335          0.45
+  fc9            0.226         0.328
+  fc10          0.0712         0.411
+  -> saved b_residual_profile.json
+  -> plot saved to b_residual_profile.png
+
+[E2] === B-iter: 10 iterations from random init ===
+  random-init test_acc=0.0943
+  iter  1: acc=0.7403  delta=+0.6460
+  iter  2: acc=0.7394  delta=+0.6451
+  iter  3: acc=0.6887  delta=+0.5944
+  iter  4: acc=0.6658  delta=+0.5715
+  iter  5: acc=0.5919  delta=+0.4976
+  iter  6: acc=0.5241  delta=+0.4298
+  iter  7: acc=0.4409  delta=+0.3466
+  iter  8: acc=0.3416  delta=+0.2473
+  iter  9: acc=0.2853  delta=+0.1910
+  iter 10: acc=0.2572  delta=+0.1629
+  [B-iter] done in 88.6s
+  trajectory: 0.0943 -> 0.7403 -> 0.7394 -> 0.6887 -> 0.6658 -> 0.5919 -> 0.5241 -> 0.4409 -> 0.3416 -> 0.2853 -> 0.2572
+  -> plot saved to b_iter.png
+  -> saved b_iter.json
+
+[E2] === B-subset: layer-subset sweep from trained model ===
+  trained baseline acc=0.9857
+  deepest_1 ( 1 layers): acc=0.9851  delta=-0.0006  (6.0s)
+  deepest_2 ( 2 layers): acc=0.9848  delta=-0.0009  (9.3s)
+  deepest_3 ( 3 layers): acc=0.9850  delta=-0.0007  (7.2s)
+  deepest_4 ( 4 layers): acc=0.9844  delta=-0.0013  (8.5s)
+  deepest_5 ( 5 layers): acc=0.9837  delta=-0.0020  (8.6s)
+  deepest_6 ( 6 layers): acc=0.9828  delta=-0.0029  (9.5s)
+  deepest_7 ( 7 layers): acc=0.9782  delta=-0.0075  (9.7s)
+  deepest_8 ( 8 layers): acc=0.9750  delta=-0.0107  (10.7s)
+  deepest_9 ( 9 layers): acc=0.9725  delta=-0.0132  (10.1s)
+  deepest_10 (10 layers): acc=0.9627  delta=-0.0230  (11.3s)
+  -> saved b_subset.json
+  -> plot saved to b_subset.png
+
+[E2] === B-K-vs-N: method × momentum comparison ===
+  random-init test_acc=0.0943
+  naive_no_mom          : acc=0.8480  delta=+0.7537  (6.7s)
+  naive_mom_match       : acc=0.7411  delta=+0.6468  (7.2s)
+  kfac_a_no_mom         : acc=0.8816  delta=+0.7873  (6.9s)
+  kfac_a_mom_match      : acc=0.7403  delta=+0.6460  (7.6s)
+  -> saved b_k_vs_n.json
+
+[E2] === COMPLETE ===
+  B-train acc:       0.9857
+  B-distill acc:     0.9712
+  B-retrain-rand acc:0.7403
+  Results at: C:\Users\Admin\OlsVered\benchmark\results\diagnostic\arch_coverage\e2

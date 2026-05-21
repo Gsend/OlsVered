@@ -1,0 +1,40 @@
+{
+  "battery": "B-residual-profile",
+  "exp_id": "e4",
+  "layer_order": [
+    "fc1",
+    "fc2",
+    "fc3",
+    "fc4",
+    "fc5",
+    "fc6"
+  ],
+  "profile": {
+    "fc1": {
+      "distill": 0.29161549742080706,
+      "retrain_rand": 0.5818551208939886
+    },
+    "fc2": {
+      "distill": 0.351828128454364,
+      "retrain_rand": 0.5740459010542854
+    },
+    "fc3": {
+      "distill": 0.31107777807743925,
+      "retrain_rand": 0.5476753337776566
+    },
+    "fc4": {
+      "distill": 0.4071916888746711,
+      "retrain_rand": 0.4501551571750809
+    },
+    "fc5": {
+      "distill": 0.5072400381969084,
+      "retrain_rand": 0.37639188218071096
+    },
+    "fc6": {
+      "distill": 0.18756128830931784,
+      "retrain_rand": 0.6676027547350781
+    }
+  },
+  "distill_mse": 99.83804140625,
+  "retrain_rand_mse": 355.32778671875
+}

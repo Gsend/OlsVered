@@ -1,0 +1,9 @@
+{
+  "battery": "B-train",
+  "exp_id": "e1",
+  "test_acc": 0.9823,
+  "epochs": 15,
+  "n_layers": 10,
+  "hidden_dim": 256,
+  "wall_s": 226.66100907325745
+}

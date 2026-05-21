@@ -1,0 +1,101 @@
+[E4] MlpAutoencoder  device=cuda  n_samples=16384  dims=[784, 256, 128, 64, 128, 256, 784]
+[E4] loading MNIST...
+
+[E4] === B-train: training MlpAutoencoder ===
+  [train] epoch  1/20  loss=0.3598  test_mse=174.0206
+  [train] epoch  2/20  loss=0.1932  test_mse=131.2895
+  [train] epoch  3/20  loss=0.1590  test_mse=115.3704
+  [train] epoch  4/20  loss=0.1428  test_mse=104.7933
+  [train] epoch  5/20  loss=0.1327  test_mse=99.5233
+  [train] epoch  6/20  loss=0.1252  test_mse=94.2043
+  [train] epoch  7/20  loss=0.1190  test_mse=89.6131
+  [train] epoch  8/20  loss=0.1139  test_mse=86.5888
+  [train] epoch  9/20  loss=0.1101  test_mse=83.2699
+  [train] epoch 10/20  loss=0.1070  test_mse=81.1739
+  [train] epoch 11/20  loss=0.1045  test_mse=79.7007
+  [train] epoch 12/20  loss=0.1026  test_mse=78.2111
+  [train] epoch 13/20  loss=0.1009  test_mse=76.9763
+  [train] epoch 14/20  loss=0.0996  test_mse=76.1000
+  [train] epoch 15/20  loss=0.0985  test_mse=75.3626
+  [train] epoch 16/20  loss=0.0976  test_mse=74.8653
+  [train] epoch 17/20  loss=0.0968  test_mse=74.2810
+  [train] epoch 18/20  loss=0.0963  test_mse=73.9949
+  [train] epoch 19/20  loss=0.0959  test_mse=73.7539
+  [train] epoch 20/20  loss=0.0957  test_mse=73.6400
+  [train] total: 669.6s
+  [B-train] test_mse=73.639951  wall=673.4s  weights -> C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\mlp_autoencoder.pt
+  -> saved b_train.json
+
+[E4] === B-distill: self-distillation from trained model ===
+  [B-distill] test_mse=99.838041  wall=7.7s
+    fc1: residual=0.292
+    fc2: residual=0.352
+    fc3: residual=0.311
+    fc4: residual=0.407
+    fc5: residual=0.507
+    fc6: residual=0.188
+  -> saved b_distill.json
+
+[E4] === B-retrain-rand: random init + GT images, single pass ===
+  random-init test_mse=798.2543
+  [B-retrain-rand] test_mse=355.327787  wall=6.9s
+    fc1: residual=0.582
+    fc2: residual=0.574
+    fc3: residual=0.548
+    fc4: residual=0.45
+    fc5: residual=0.376
+    fc6: residual=0.668
+  -> saved b_retrain_rand.json
+
+[E4] === B-residual-profile ===
+  layer        distill  retrain_rand
+  fc1            0.292         0.582
+  fc2            0.352         0.574
+  fc3            0.311         0.548
+  fc4            0.407          0.45
+  fc5            0.507         0.376
+  fc6            0.188         0.668
+  -> saved b_residual_profile.json
+  -> plot saved to b_residual_profile.png
+
+[E4] === B-iter: 10 iterations from random init ===
+  random-init test_mse=798.2543
+  iter  1: mse=355.327787  delta=-442.926476
+  iter  2: mse=387.016243  delta=-411.238020
+  iter  3: mse=398.589075  delta=-399.665188
+  iter  4: mse=404.157275  delta=-394.096987
+  iter  5: mse=405.835248  delta=-392.419014
+  iter  6: mse=406.602152  delta=-391.652111
+  iter  7: mse=406.476030  delta=-391.778233
+  iter  8: mse=402.290018  delta=-395.964245
+  iter  9: mse=396.807547  delta=-401.446716
+  iter 10: mse=388.584096  delta=-409.670166
+  [B-iter] done in 74.7s
+  trajectory: 798.2543 -> 355.3278 -> 387.0162 -> 398.5891 -> 404.1573 -> 405.8352 -> 406.6022 -> 406.4760 -> 402.2900 -> 396.8075 -> 388.5841
+  -> plot saved to b_iter.png
+  -> saved b_iter.json
+
+[E4] === B-subset: layer-subset sweep from trained model ===
+  trained baseline mse=73.639951
+  deepest_1 ( 1 layers): mse=71.281271  delta=-2.358680  (5.5s)
+  deepest_2 ( 2 layers): mse=75.259200  delta=+1.619248  (4.6s)
+  deepest_3 ( 3 layers): mse=76.749914  delta=+3.109962  (4.6s)
+  deepest_4 ( 4 layers): mse=81.810333  delta=+8.170382  (5.0s)
+  deepest_5 ( 5 layers): mse=103.122183  delta=+29.482231  (5.3s)
+  deepest_6 ( 6 layers): mse=131.490334  delta=+57.850383  (5.9s)
+  -> saved b_subset.json
+  -> plot saved to b_subset.png
+
+[E4] === B-K-vs-N: method × momentum comparison ===
+  random-init test_mse=798.2543
+  naive_no_mom          : mse=212.155749  delta=-586.098513  (4.1s)
+  naive_mom_match       : mse=382.520214  delta=-415.734048  (4.5s)
+  kfac_a_no_mom         : mse=228.732852  delta=-569.521411  (4.4s)
+  kfac_a_mom_match      : mse=355.327787  delta=-442.926476  (4.7s)
+  -> saved b_k_vs_n.json
+
+[E4] === COMPLETE ===
+  B-train mse:       73.6399513671875
+  B-distill mse:     99.83804140625
+  B-retrain-rand mse:355.32778671875
+  Results at: C:\Users\Admin\OlsVered\benchmark\results\diagnostic\arch_coverage\e4

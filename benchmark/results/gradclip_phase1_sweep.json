@@ -1,0 +1,196 @@
+{
+  "hw": {
+    "gpu_name": "NVIDIA GeForce RTX 3080 Laptop GPU",
+    "gpu_vram_gb": 17.18,
+    "gpu_count": 1,
+    "cuda_version": "12.8",
+    "gpu_sm": "sm_86",
+    "gpu_driver": "573.91",
+    "cpu": "Intel64 Family 6 Model 141 Stepping 1, GenuineIntel",
+    "cpu_cores": 16,
+    "ram_gb": null,
+    "torch_version": "2.11.0+cu128",
+    "python_version": "3.12.10"
+  },
+  "kfac_lr": 0.008,
+  "momentum": 0.9,
+  "damping": 1e-05,
+  "variant_dampings": {
+    "VeredKFAC": 1e-05
+  },
+  "gradclip_grid": [
+    30.0,
+    40.0,
+    60.0
+  ],
+  "probe_steps": 1000,
+  "max_stable": {
+    "VeredKFAC": 60
+  },
+  "runs": {
+    "VeredKFAC": [
+      {
+        "variant": "VeredKFAC",
+        "kfac_lr": 0.008,
+        "damping": 1e-05,
+        "momentum": 0.9,
+        "grad_clip": 30.0,
+        "status": "stable",
+        "diverge_step": null,
+        "diverge_loss": null,
+        "steps_completed": 1000,
+        "samples_seen": 63994,
+        "wall_s": 713.4866562000243,
+        "running_min_loss": 7.647078514099121,
+        "final_ppl": 3104.4649447343463,
+        "median_step_ms": 648.8243000057992,
+        "median_natgrad_norm": null,
+        "val_steps": [
+          157,
+          313,
+          469,
+          626,
+          782,
+          938,
+          1000
+        ],
+        "val_samples": [
+          10048,
+          20030,
+          30014,
+          40060,
+          50044,
+          60026,
+          63994
+        ],
+        "val_times": [
+          110.41714190001949,
+          221.16743620001944,
+          331.7595754000067,
+          442.92956350001623,
+          553.6232562000223,
+          664.1862517000118,
+          713.4202768999967
+        ],
+        "val_ppls": [
+          9999.0,
+          9999.0,
+          7207.140359133809,
+          4022.132896840784,
+          3288.902667587101,
+          3117.7437086372515,
+          3104.4649447343463
+        ],
+        "condition_summary": {}
+      },
+      {
+        "variant": "VeredKFAC",
+        "kfac_lr": 0.008,
+        "damping": 1e-05,
+        "momentum": 0.9,
+        "grad_clip": 40,
+        "status": "stable",
+        "diverge_step": null,
+        "diverge_loss": null,
+        "steps_completed": 1000,
+        "samples_seen": 63994,
+        "wall_s": 711.8758303000068,
+        "running_min_loss": 7.6756086349487305,
+        "final_ppl": 3198.178587178265,
+        "median_step_ms": 648.7061999941943,
+        "median_natgrad_norm": null,
+        "val_steps": [
+          157,
+          313,
+          469,
+          626,
+          782,
+          938,
+          1000
+        ],
+        "val_samples": [
+          10048,
+          20030,
+          30014,
+          40060,
+          50044,
+          60026,
+          63994
+        ],
+        "val_times": [
+          108.65329899999779,
+          219.34704389999388,
+          329.9573665999924,
+          441.19274529998074,
+          551.8796759999823,
+          662.5296991000068,
+          711.8182700999896
+        ],
+        "val_ppls": [
+          9999.0,
+          9999.0,
+          7469.8345191971675,
+          4127.703939231249,
+          3385.131511444233,
+          3211.196497329835,
+          3198.178587178265
+        ],
+        "condition_summary": {}
+      },
+      {
+        "variant": "VeredKFAC",
+        "kfac_lr": 0.008,
+        "damping": 1e-05,
+        "momentum": 0.9,
+        "grad_clip": 60,
+        "status": "stable",
+        "diverge_step": null,
+        "diverge_loss": null,
+        "steps_completed": 1000,
+        "samples_seen": 63994,
+        "wall_s": 711.8878531999944,
+        "running_min_loss": 7.71905517578125,
+        "final_ppl": 3349.395052756614,
+        "median_step_ms": 648.5617500002263,
+        "median_natgrad_norm": null,
+        "val_steps": [
+          157,
+          313,
+          469,
+          626,
+          782,
+          938,
+          1000
+        ],
+        "val_samples": [
+          10048,
+          20030,
+          30014,
+          40060,
+          50044,
+          60026,
+          63994
+        ],
+        "val_times": [
+          108.73567609998281,
+          219.51171179997618,
+          330.0944101999921,
+          441.27317109997966,
+          552.01824819998,
+          662.6123125999875,
+          711.833053099981
+        ],
+        "val_ppls": [
+          9999.0,
+          9999.0,
+          8132.932681703348,
+          4428.317300350053,
+          3561.367818970543,
+          3363.791155480871,
+          3349.395052756614
+        ],
+        "condition_summary": {}
+      }
+    ]
+  }
+}

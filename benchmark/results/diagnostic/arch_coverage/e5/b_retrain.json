@@ -1,0 +1,18 @@
+{
+  "battery": "B-retrain-rand",
+  "exp_id": "e5",
+  "seed": 42,
+  "method": "kfac_a",
+  "random_init_acc": 0.0887,
+  "retrained_acc": 0.3306,
+  "delta": 0.2419,
+  "wall_s": 5.101078748703003,
+  "per_layer_residuals": {
+    "fc": 0.5064766601830024,
+    "b2_conv2": 0.4580840945983774,
+    "b2_conv1": 0.39084113006200133,
+    "b1_conv2": 0.8208737550151216,
+    "b1_conv1": 0.5260398500447787,
+    "conv0": 0.7897456649120378
+  }
+}

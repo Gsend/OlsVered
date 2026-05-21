@@ -1,0 +1,100 @@
+{
+  "battery": "B-distill",
+  "exp_id": "e1",
+  "test_acc": 0.9537,
+  "wall_s": 6.4447596073150635,
+  "per_layer_residuals": {
+    "fc1": 0.738544253992961,
+    "fc2": 0.7465814499338363,
+    "fc3": 0.6591409496334231,
+    "fc4": 0.5376580901539191,
+    "fc5": 0.4958370100998265,
+    "fc6": 0.4815043142529784,
+    "fc7": 0.473497800888215,
+    "fc8": 0.466682419767376,
+    "fc9": 0.34824492711755367,
+    "fc10": 0.15166504730059846
+  },
+  "per_layer_info": {
+    "9": {
+      "d_in": 784,
+      "d_out": 256,
+      "weight_change_frob": 137.62814331054688,
+      "bias_change_frob": 1.7753556966781616,
+      "target_residual": 0.738544253992961,
+      "n_samples": 16384
+    },
+    "8": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 41.07965850830078,
+      "bias_change_frob": 6.020910263061523,
+      "target_residual": 0.7465814499338363,
+      "n_samples": 16384
+    },
+    "7": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 32.0007438659668,
+      "bias_change_frob": 4.076937675476074,
+      "target_residual": 0.6591409496334231,
+      "n_samples": 16384
+    },
+    "6": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 66.56971740722656,
+      "bias_change_frob": 6.105844974517822,
+      "target_residual": 0.5376580901539191,
+      "n_samples": 16384
+    },
+    "5": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 85.29997253417969,
+      "bias_change_frob": 6.518704414367676,
+      "target_residual": 0.4958370100998265,
+      "n_samples": 16384
+    },
+    "4": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 83.43717956542969,
+      "bias_change_frob": 4.669546604156494,
+      "target_residual": 0.4815043142529784,
+      "n_samples": 16384
+    },
+    "3": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 83.01448059082031,
+      "bias_change_frob": 7.392860412597656,
+      "target_residual": 0.473497800888215,
+      "n_samples": 16384
+    },
+    "2": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 93.12903594970703,
+      "bias_change_frob": 11.544380187988281,
+      "target_residual": 0.466682419767376,
+      "n_samples": 16384
+    },
+    "1": {
+      "d_in": 256,
+      "d_out": 256,
+      "weight_change_frob": 94.6687240600586,
+      "bias_change_frob": 20.049901962280273,
+      "target_residual": 0.34824492711755367,
+      "n_samples": 16384
+    },
+    "0": {
+      "d_in": 256,
+      "d_out": 10,
+      "weight_change_frob": 11.024519920349121,
+      "bias_change_frob": 0.6584875583648682,
+      "target_residual": 0.15166504730059846,
+      "n_samples": 16384
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "battery": "B-distill-feature",
+  "exp_id": "e5",
+  "teacher_acc": 0.7124,
+  "random_init_acc": 0.0887,
+  "student_acc": 0.7125,
+  "delta_vs_teacher": 9.999999999998899e-05,
+  "per_layer_residuals": {
+    "fc": 0.0010160314415960693,
+    "b2_conv2": 0.0008177069336077693,
+    "b2_conv1": 0.0008396118635271557,
+    "b1_conv2": 0.0008195990093085263,
+    "b1_conv1": 0.0007748158679138951,
+    "conv0": 0.0016321982858885295
+  }
+}

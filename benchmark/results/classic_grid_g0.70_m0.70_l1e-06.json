@@ -1,0 +1,39 @@
+{
+  "config": {
+    "variant": "ClassicKFAC",
+    "kfac_lr": 0.008,
+    "grad_clip": 60.0,
+    "max_steps": 5000,
+    "gamma": 0.7,
+    "momentum": 0.7,
+    "damping": 1e-06
+  },
+  "hw": {
+    "gpu_name": "NVIDIA GeForce RTX 3080 Laptop GPU",
+    "gpu_vram_gb": 17.18,
+    "gpu_count": 1,
+    "cuda_version": "12.8",
+    "gpu_sm": "sm_86",
+    "gpu_driver": "573.91",
+    "cpu": "Intel64 Family 6 Model 141 Stepping 1, GenuineIntel",
+    "cpu_cores": 16,
+    "ram_gb": null,
+    "torch_version": "2.11.0+cu128",
+    "python_version": "3.12.10"
+  },
+  "wall_s": 527.0926131000742,
+  "result": {
+    "status": "diverged_crash",
+    "error": "_LinAlgError: linalg.eigh: The algorithm failed to converge because the input matrix is ill-conditioned or has too many repeated eigenvalues (error code: 1).",
+    "final_ppl": null,
+    "val_ppls": [],
+    "val_times": [],
+    "median_step_ms": null
+  },
+  "time_to_target": {
+    "ppl<=1000": null,
+    "ppl<=800": null,
+    "ppl<=750": null,
+    "ppl<=700": null
+  }
+}

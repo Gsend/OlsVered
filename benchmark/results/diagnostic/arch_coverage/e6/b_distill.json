@@ -1,0 +1,21 @@
+{
+  "battery": "B-distill-feature",
+  "exp_id": "e6",
+  "seed": 42,
+  "teacher_mse": 0.006995487689971924,
+  "random_init_mse": 0.06983957576751709,
+  "student_mse": 0.0069966290593147275,
+  "delta_vs_teacher": 1.1413693428033791e-06,
+  "per_layer_residuals": {
+    "enc1_conv1": 0.0001716928694781841,
+    "enc1_conv2": 0.0008932132930658823,
+    "enc2_conv1": 0.0006979051227727115,
+    "enc2_conv2": 0.0006665930515073449,
+    "dec2_conv1": 0.009868112370153972,
+    "dec2_conv2": 0.0060056592817994804,
+    "dec1_conv1": 0.010090740088472707,
+    "dec1_conv2": 0.003991356991560034,
+    "final_conv": 0.0033878075560670067
+  },
+  "note": "32\u00d732 padded MNIST, noise_std=0.5, BN-free, no moment-correction."
+}

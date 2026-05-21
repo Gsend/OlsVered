@@ -1,0 +1,92 @@
+[E3] LeNet  device=cuda  n_images=512
+[E3] loading MNIST...
+
+[E3] === B-train: training LeNet ===
+  [train] epoch  1/15  loss=0.3040  test_acc=0.9743
+  [train] epoch  2/15  loss=0.0827  test_acc=0.9854
+  [train] epoch  3/15  loss=0.0546  test_acc=0.9832
+  [train] epoch  4/15  loss=0.0419  test_acc=0.9871
+  [train] epoch  5/15  loss=0.0343  test_acc=0.9885
+  [train] epoch  6/15  loss=0.0264  test_acc=0.9904
+  [train] epoch  7/15  loss=0.0224  test_acc=0.9900
+  [train] epoch  8/15  loss=0.0180  test_acc=0.9895
+  [train] epoch  9/15  loss=0.0128  test_acc=0.9914
+  [train] epoch 10/15  loss=0.0099  test_acc=0.9914
+  [train] epoch 11/15  loss=0.0074  test_acc=0.9912
+  [train] epoch 12/15  loss=0.0055  test_acc=0.9923
+  [train] epoch 13/15  loss=0.0043  test_acc=0.9916
+  [train] epoch 14/15  loss=0.0037  test_acc=0.9923
+  [train] epoch 15/15  loss=0.0033  test_acc=0.9922
+  [train] total: 510.8s
+  [B-train] test_acc=0.9922  wall=516.9s  weights -> C:\Users\Admin\OlsVered\benchmark\weights\arch_coverage\lenet.pt
+  -> saved b_train.json
+
+[E3] === B-distill: self-distillation from trained model ===
+  [B-distill] test_acc=0.2800  wall=8.8s
+    fc3: residual=0.000275
+    fc2: residual=0.2
+    fc1: residual=0.223
+    conv2: residual=0.82
+    conv1: residual=0.705
+  -> saved b_distill.json
+
+[E3] === B-retrain-rand: random init + GT labels, single pass ===
+  random-init test_acc=0.0980
+  [B-retrain-rand] test_acc=0.0993  delta=+0.0013  wall=8.2s
+    fc3: residual=0.377
+    fc2: residual=0.236
+    fc1: residual=0.162
+    conv2: residual=0.563
+    conv1: residual=0.552
+  -> saved b_retrain_rand.json
+
+[E3] === B-residual-profile ===
+  layer        distill  retrain_rand
+  conv1          0.705         0.552
+  conv2           0.82         0.563
+  fc1            0.223         0.162
+  fc2              0.2         0.236
+  fc3         0.000275         0.377
+  -> saved b_residual_profile.json
+  -> plot saved to b_residual_profile.png
+
+[E3] === B-iter: 10 iterations from random init ===
+  random-init test_acc=0.0980
+  iter  1: acc=0.0993  delta=+0.0013
+  iter  2: acc=0.1380  delta=+0.0400
+  iter  3: acc=0.0878  delta=-0.0102
+  iter  4: acc=0.1537  delta=+0.0557
+  iter  5: acc=0.1781  delta=+0.0801
+  iter  6: acc=0.1463  delta=+0.0483
+  iter  7: acc=0.0980  delta=+0.0000
+  iter  8: acc=0.0980  delta=+0.0000
+  iter  9: acc=0.1135  delta=+0.0155
+  iter 10: acc=0.1764  delta=+0.0784
+  [B-iter] done in 55.9s
+  trajectory: 0.0980 -> 0.0993 -> 0.1380 -> 0.0878 -> 0.1537 -> 0.1781 -> 0.1463 -> 0.0980 -> 0.0980 -> 0.1135 -> 0.1764
+  -> plot saved to b_iter.png
+  -> saved b_iter.json
+
+[E3] === B-subset: layer-subset sweep from trained model ===
+  trained baseline acc=0.9922
+  deepest_1 (1 layers [fc3]): acc=0.9852  delta=-0.0070  (3.4s)
+  deepest_2 (2 layers [fc3+fc2]): acc=0.9684  delta=-0.0238  (3.2s)
+  deepest_3 (3 layers [fc3+fc2+fc1]): acc=0.3513  delta=-0.6409  (3.2s)
+  deepest_4 (4 layers [fc3+fc2+fc1+conv2]): acc=0.1294  delta=-0.8628  (5.1s)
+  deepest_5 (5 layers [fc3+fc2+fc1+conv2+conv1]): acc=0.1056  delta=-0.8866  (3.2s)
+  -> saved b_subset.json
+  -> plot saved to b_subset.png
+
+[E3] === B-K-vs-N: method × momentum comparison ===
+  random-init test_acc=0.0980
+  naive_no_mom          : acc=0.0746  delta=-0.0234  (3.8s)
+  naive_mom_match       : acc=0.1097  delta=+0.0117  (4.0s)
+  kfac_a_no_mom         : acc=0.0955  delta=-0.0025  (3.9s)
+  kfac_a_mom_match      : acc=0.0993  delta=+0.0013  (6.2s)
+  -> saved b_k_vs_n.json
+
+[E3] === COMPLETE ===
+  B-train acc:       0.9922
+  B-distill acc:     0.28
+  B-retrain-rand acc:0.0993
+  Results at: C:\Users\Admin\OlsVered\benchmark\results\diagnostic\arch_coverage\e3

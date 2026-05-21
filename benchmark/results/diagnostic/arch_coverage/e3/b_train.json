@@ -1,0 +1,7 @@
+{
+  "battery": "B-train",
+  "exp_id": "e3",
+  "test_acc": 0.9922,
+  "epochs": 15,
+  "wall_s": 516.9127445220947
+}

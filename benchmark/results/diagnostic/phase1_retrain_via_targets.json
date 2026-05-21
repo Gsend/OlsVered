@@ -1,0 +1,316 @@
+{
+  "task": "phase1_retrain_via_targets",
+  "baseline_acc": 0.9772,
+  "max_samples": 16384,
+  "retrain_data": "train",
+  "n_iterations": 5,
+  "ols_lambda": 0.0001,
+  "configs": [
+    {
+      "config": "naive_no_correction",
+      "method": "naive",
+      "correct_target_mean": false,
+      "correct_target_cov": false,
+      "baseline_acc": 0.9772,
+      "retrained_acc": 0.2832,
+      "acc_delta": -0.694,
+      "wall_s": 20.18795609474182,
+      "iter_accuracies": [
+        0.4157,
+        0.1457,
+        0.072,
+        0.1747,
+        0.2832
+      ],
+      "final_per_layer": {
+        "0": {
+          "d_in": 128,
+          "d_out": 10,
+          "weight_change_frob": 35.084815979003906,
+          "bias_change_frob": 5.726632595062256,
+          "target_residual": 0.4978985540024872,
+          "n_samples": 16384
+        },
+        "1": {
+          "d_in": 256,
+          "d_out": 128,
+          "weight_change_frob": 15.35356330871582,
+          "bias_change_frob": 5.909842491149902,
+          "target_residual": 0.3721790794948464,
+          "n_samples": 16384
+        },
+        "2": {
+          "d_in": 512,
+          "d_out": 256,
+          "weight_change_frob": 50.338775634765625,
+          "bias_change_frob": 9.098814964294434,
+          "target_residual": 0.41373851459885563,
+          "n_samples": 16384
+        },
+        "3": {
+          "d_in": 784,
+          "d_out": 512,
+          "weight_change_frob": 129.24655151367188,
+          "bias_change_frob": 2.5879709720611572,
+          "target_residual": 0.4364840782266361,
+          "n_samples": 16384
+        }
+      }
+    },
+    {
+      "config": "naive_mean_only",
+      "method": "naive",
+      "correct_target_mean": true,
+      "correct_target_cov": false,
+      "baseline_acc": 0.9772,
+      "retrained_acc": 0.1243,
+      "acc_delta": -0.8529,
+      "wall_s": 17.964945316314697,
+      "iter_accuracies": [
+        0.3627,
+        0.1335,
+        0.0391,
+        0.1015,
+        0.1243
+      ],
+      "final_per_layer": {
+        "0": {
+          "d_in": 128,
+          "d_out": 10,
+          "weight_change_frob": 20.620864868164062,
+          "bias_change_frob": 6.028183460235596,
+          "target_residual": 0.7318507215124667,
+          "n_samples": 16384
+        },
+        "1": {
+          "d_in": 256,
+          "d_out": 128,
+          "weight_change_frob": 14.890851020812988,
+          "bias_change_frob": 6.956278324127197,
+          "target_residual": 0.05399667293301615,
+          "n_samples": 16384
+        },
+        "2": {
+          "d_in": 512,
+          "d_out": 256,
+          "weight_change_frob": 57.5211296081543,
+          "bias_change_frob": 6.834649562835693,
+          "target_residual": 0.07519787417572885,
+          "n_samples": 16384
+        },
+        "3": {
+          "d_in": 784,
+          "d_out": 512,
+          "weight_change_frob": 205.37721252441406,
+          "bias_change_frob": 5.82056999206543,
+          "target_residual": 0.25347178183476315,
+          "n_samples": 16384
+        }
+      }
+    },
+    {
+      "config": "naive_moment_match",
+      "method": "naive",
+      "correct_target_mean": true,
+      "correct_target_cov": true,
+      "baseline_acc": 0.9772,
+      "retrained_acc": 0.1009,
+      "acc_delta": -0.8763,
+      "wall_s": 20.894039154052734,
+      "iter_accuracies": [
+        0.8352,
+        0.7571,
+        0.1009,
+        0.1009,
+        0.1009
+      ],
+      "final_per_layer": {
+        "0": {
+          "d_in": 128,
+          "d_out": 10,
+          "weight_change_frob": 233.41329956054688,
+          "bias_change_frob": 9.812445640563965,
+          "target_residual": 0.9474081195123238,
+          "n_samples": 16384
+        },
+        "1": {
+          "d_in": 256,
+          "d_out": 128,
+          "weight_change_frob": 14.59652328491211,
+          "bias_change_frob": 0.5465865135192871,
+          "target_residual": 0.021974857238896216,
+          "n_samples": 16384
+        },
+        "2": {
+          "d_in": 512,
+          "d_out": 256,
+          "weight_change_frob": 17.056411743164062,
+          "bias_change_frob": 0.4618816673755646,
+          "target_residual": 0.02398267293178687,
+          "n_samples": 16384
+        },
+        "3": {
+          "d_in": 784,
+          "d_out": 512,
+          "weight_change_frob": 7.632052898406982,
+          "bias_change_frob": 0.10922932624816895,
+          "target_residual": 0.09803516758634905,
+          "n_samples": 16384
+        }
+      }
+    },
+    {
+      "config": "kfac_no_correction",
+      "method": "kfac_a",
+      "correct_target_mean": false,
+      "correct_target_cov": false,
+      "baseline_acc": 0.9772,
+      "retrained_acc": 0.1129,
+      "acc_delta": -0.8643,
+      "wall_s": 17.646728992462158,
+      "iter_accuracies": [
+        0.6687,
+        0.09,
+        0.1084,
+        0.0907,
+        0.1129
+      ],
+      "final_per_layer": {
+        "0": {
+          "d_in": 128,
+          "d_out": 10,
+          "weight_change_frob": 5.179704189300537,
+          "bias_change_frob": 1.7536722421646118,
+          "target_residual": 0.6280731359349307,
+          "n_samples": 16384
+        },
+        "1": {
+          "d_in": 256,
+          "d_out": 128,
+          "weight_change_frob": 19.29557991027832,
+          "bias_change_frob": 1.7695790529251099,
+          "target_residual": 0.07819142376347056,
+          "n_samples": 16384
+        },
+        "2": {
+          "d_in": 512,
+          "d_out": 256,
+          "weight_change_frob": 202.39141845703125,
+          "bias_change_frob": 12.796667098999023,
+          "target_residual": 0.14183579900719093,
+          "n_samples": 16384
+        },
+        "3": {
+          "d_in": 784,
+          "d_out": 512,
+          "weight_change_frob": 1004.3754272460938,
+          "bias_change_frob": 25.572303771972656,
+          "target_residual": 0.2823332417572799,
+          "n_samples": 16384
+        }
+      }
+    },
+    {
+      "config": "kfac_mean_only",
+      "method": "kfac_a",
+      "correct_target_mean": true,
+      "correct_target_cov": false,
+      "baseline_acc": 0.9772,
+      "retrained_acc": 0.0746,
+      "acc_delta": -0.9026,
+      "wall_s": 18.92599582672119,
+      "iter_accuracies": [
+        0.7404,
+        0.5476,
+        0.1289,
+        0.1011,
+        0.0746
+      ],
+      "final_per_layer": {
+        "0": {
+          "d_in": 128,
+          "d_out": 10,
+          "weight_change_frob": 15.893994331359863,
+          "bias_change_frob": 2.1728804111480713,
+          "target_residual": 0.7481931694780593,
+          "n_samples": 16384
+        },
+        "1": {
+          "d_in": 256,
+          "d_out": 128,
+          "weight_change_frob": 182.4667510986328,
+          "bias_change_frob": 12.81710433959961,
+          "target_residual": 0.33807999631539387,
+          "n_samples": 16384
+        },
+        "2": {
+          "d_in": 512,
+          "d_out": 256,
+          "weight_change_frob": 562.5370483398438,
+          "bias_change_frob": 9.069149017333984,
+          "target_residual": 0.41811857127085034,
+          "n_samples": 16384
+        },
+        "3": {
+          "d_in": 784,
+          "d_out": 512,
+          "weight_change_frob": 837.726806640625,
+          "bias_change_frob": 31.651464462280273,
+          "target_residual": 0.526340415690542,
+          "n_samples": 16384
+        }
+      }
+    },
+    {
+      "config": "kfac_moment_match",
+      "method": "kfac_a",
+      "correct_target_mean": true,
+      "correct_target_cov": true,
+      "baseline_acc": 0.9772,
+      "retrained_acc": 0.5471,
+      "acc_delta": -0.4300999999999999,
+      "wall_s": 20.743975400924683,
+      "iter_accuracies": [
+        0.908,
+        0.8962,
+        0.8672,
+        0.7991,
+        0.5471
+      ],
+      "final_per_layer": {
+        "0": {
+          "d_in": 128,
+          "d_out": 10,
+          "weight_change_frob": 70.85679626464844,
+          "bias_change_frob": 12.343717575073242,
+          "target_residual": 0.38911825450806253,
+          "n_samples": 16384
+        },
+        "1": {
+          "d_in": 256,
+          "d_out": 128,
+          "weight_change_frob": 59.8050422668457,
+          "bias_change_frob": 6.367614269256592,
+          "target_residual": 0.13534456332263786,
+          "n_samples": 16384
+        },
+        "2": {
+          "d_in": 512,
+          "d_out": 256,
+          "weight_change_frob": 52.48819351196289,
+          "bias_change_frob": 7.319090843200684,
+          "target_residual": 0.1673080965427013,
+          "n_samples": 16384
+        },
+        "3": {
+          "d_in": 784,
+          "d_out": 512,
+          "weight_change_frob": 37.126220703125,
+          "bias_change_frob": 0.5570740699768066,
+          "target_residual": 0.27176566740946206,
+          "n_samples": 16384
+        }
+      }
+    }
+  ]
+}

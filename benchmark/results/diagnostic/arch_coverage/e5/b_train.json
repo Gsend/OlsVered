@@ -1,0 +1,8 @@
+{
+  "battery": "B-train",
+  "exp_id": "e5",
+  "seed": 42,
+  "epochs": 30,
+  "trained_acc": 0.7124,
+  "width": 32
+}

@@ -1,0 +1,14 @@
+{
+  "battery": "OPT1-round-trip",
+  "exp_id": "e3",
+  "round_trip_residuals": {
+    "fc3": 0.00027496867404553136,
+    "fc2": 0.0002548614199600992,
+    "fc1": 0.0004933437591697461,
+    "conv2": 0.00021245043056194112,
+    "conv1": 0.00015410500395918043
+  },
+  "trained_acc": 0.9922,
+  "refit_acc": 0.9922,
+  "interpretation": "Residuals ~0 (incl. conv) => conv OLS + im2col capture is sound; the E3 failure is the pool inversion, not the conv solve."
+}

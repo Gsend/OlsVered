@@ -1,0 +1,17 @@
+{
+  "battery": "OPT3-avgpool",
+  "exp_id": "e3",
+  "seed": 42,
+  "trained_acc": 0.9914,
+  "random_init_acc": 0.098,
+  "retrained_acc": 0.1804,
+  "delta": 0.0824,
+  "wall_s": 2.129488706588745,
+  "per_layer_residuals": {
+    "fc3": 0.3538359625888024,
+    "fc2": 0.18841419772680265,
+    "fc1": 0.15645586398494515,
+    "conv2": 0.5895089662371,
+    "conv1": 0.536391020000915
+  }
+}

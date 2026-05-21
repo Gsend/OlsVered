@@ -1,0 +1,76 @@
+{
+  "battery": "B-subset",
+  "exp_id": "e4",
+  "trained_mse": 73.6399513671875,
+  "subsets": {
+    "deepest_1": {
+      "n_retrained": 1,
+      "target_layers": [
+        "fc6"
+      ],
+      "mse": 71.2812712890625,
+      "delta": -2.358680078125005,
+      "wall_s": 5.469853639602661
+    },
+    "deepest_2": {
+      "n_retrained": 2,
+      "target_layers": [
+        "fc6",
+        "fc5"
+      ],
+      "mse": 75.259199609375,
+      "delta": 1.6192482421874956,
+      "wall_s": 4.645250082015991
+    },
+    "deepest_3": {
+      "n_retrained": 3,
+      "target_layers": [
+        "fc6",
+        "fc5",
+        "fc4"
+      ],
+      "mse": 76.749913671875,
+      "delta": 3.1099623046874996,
+      "wall_s": 4.648192405700684
+    },
+    "deepest_4": {
+      "n_retrained": 4,
+      "target_layers": [
+        "fc6",
+        "fc5",
+        "fc4",
+        "fc3"
+      ],
+      "mse": 81.810333203125,
+      "delta": 8.17038183593749,
+      "wall_s": 4.9907848834991455
+    },
+    "deepest_5": {
+      "n_retrained": 5,
+      "target_layers": [
+        "fc6",
+        "fc5",
+        "fc4",
+        "fc3",
+        "fc2"
+      ],
+      "mse": 103.1221828125,
+      "delta": 29.482231445312493,
+      "wall_s": 5.267612457275391
+    },
+    "deepest_6": {
+      "n_retrained": 6,
+      "target_layers": [
+        "fc6",
+        "fc5",
+        "fc4",
+        "fc3",
+        "fc2",
+        "fc1"
+      ],
+      "mse": 131.490333984375,
+      "delta": 57.850382617187506,
+      "wall_s": 5.880040168762207
+    }
+  }
+}

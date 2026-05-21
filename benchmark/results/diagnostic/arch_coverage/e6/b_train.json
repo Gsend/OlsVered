@@ -1,0 +1,11 @@
+{
+  "battery": "B-train",
+  "exp_id": "e6",
+  "seed": 42,
+  "epochs": 20,
+  "trained_mse": 0.006995487689971924,
+  "random_mse": 0.06983957576751709,
+  "img_size": 32,
+  "noise_std": 0.5,
+  "note": "28x28 MNIST padded to 32x32 with 2px border"
+}
