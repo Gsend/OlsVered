@@ -431,7 +431,9 @@ def main(argv=None):
     ap.add_argument("--fit-head", action="store_true", default=False)
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args(argv)
+    globals()["SEED"] = args.seed
 
     # Per-task defaults
     global _CURRENT_TASK

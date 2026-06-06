@@ -107,6 +107,26 @@ cross-architecture exact-distillation/retrain-wall characterization, not the inv
 
 ---
 
+## 5b. Limitations to disclose (do not bury these)
+
+- **The synthetic task's *label* shift is low-rank, so LoRA-rank conclusions are limited.**
+  On the pointer task, end-to-end label LoRA reaches the teacher at **rank 1–2** (LR2b),
+  while *activation-matching* distillation needs **rank ≈32–64** (LR1/LR2a). This is a clean
+  and real dichotomy (matching activations is high-rank; matching a 2-class label is
+  low-rank), but the *absolute* rank numbers are an artifact of a binary synthetic task with
+  a ~100% ceiling. **Any claim about "how much rank a task needs" must be validated on a
+  harder/real task** (lower achievable ceiling, multi-class, real data) before it can be
+  stated as a finding. Until then, present the rank sweep as a *capacity-vs-objective*
+  illustration, not a measurement of intrinsic task rank.
+- **The LoRA base is random in LR1/LR2** — the adapter carries the entire transform, which
+  is why near-full rank is needed there. The realistic pretrained-base→new-task setting
+  (LR3) is the one whose rank/forgetting numbers should be cited; the random-base runs are a
+  method stress test, not the LoRA use case.
+- **Forgetting is only measured with the adapter merged in** (single combined model); the
+  frozen base trivially recovers the original task once the adapter is detached.
+
+---
+
 ## 6. What to add before submission (by venue)
 
 - **Workshop / TMLR (recommended):** add ≥3 seeds on the headline numbers; finish WP-C

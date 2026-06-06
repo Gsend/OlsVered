@@ -65,7 +65,11 @@ def _module_tag(module: nn.Module) -> str:
 import torch.nn.functional as F
 
 from optimizer.gram_estimator import GramMatrixEstimator
-from optimizer.sgso import streaming_tsqr_update, finalize_R
+from optimizer.sgso import (
+    streaming_tsqr_update,
+    finalize_R,
+    batched_streaming_tsqr_update,
+)
 
 # Suppress the benign PyTorch warning about backward hooks on layers
 # whose inputs don't require grad (e.g. the first layer).
@@ -129,6 +133,9 @@ class RawActivationHooks(GramMatrixEstimator):
         augment_bias: bool = False,
         max_conv_rows: int = 512,
         max_seq_rows: Optional[int] = None,
+        batched: bool = False,
+        deferred: bool = False,
+        deferred_window: int = 5,
     ):
         self.model = model
         self.damping = damping
@@ -138,6 +145,30 @@ class RawActivationHooks(GramMatrixEstimator):
         # 0 = no cap)
         self.max_seq_rows = (self._SEQ_SUBSAMPLE if max_seq_rows is None
                               else max_seq_rows)
+        # When True, hooks buffer chunks per layer; the optimizer must call
+        # flush() before reading factors.  flush() does batched cuSOLVER QR
+        # per (n)-bucket, reducing ~128 launches/step to ~6-12.
+        self.batched = batched
+        # When True, hooks store raw chunks across (up to deferred_window)
+        # steps then merge via streaming_tsqr_update.  Bigger chunks → fewer
+        # cuSOLVER launches, better tall-skinny QR utilisation.  Trades extra
+        # GPU memory for ~1.5-2x wall-time speedup vs streaming TSQR (still
+        # kappa^1 stable — never forms X^T X).  Mutually exclusive with `batched`.
+        #
+        # deferred_window caps in-flight raw chunks per layer.  At freq=20 and
+        # window=5, each layer holds at most 5 chunks ≈ 5x memory of streaming
+        # (vs 20x for full-window deferred which can OOM on wide models).
+        self.deferred = deferred
+        self.deferred_window = deferred_window
+        # Optional per-chunk transform applied to x/delta inside the hooks
+        # after subsample/augment, BEFORE buffering or streaming TSQR.  This
+        # is the right place to inject row-weighting schemes (e.g. WGSO):
+        # the transform sees the same per-step chunk regardless of which
+        # accumulation mode is active.
+        self.chunk_transform_X = None
+        self.chunk_transform_G = None
+        if batched and deferred:
+            raise ValueError("batched and deferred modes are mutually exclusive")
 
         self._handles: List[torch.utils.hooks.RemovableHook] = []
         self._enabled = False
@@ -150,6 +181,16 @@ class RawActivationHooks(GramMatrixEstimator):
         # Total accumulated rows (for p >= n validation).
         self._n_rows_X: Dict[nn.Module, int] = {}
         self._n_rows_G: Dict[nn.Module, int] = {}
+
+        # Batched-mode pending buffers: per-layer list of chunks to flush.
+        # Cleared on each flush() call.
+        self._pending_X: Dict[nn.Module, List[torch.Tensor]] = {}
+        self._pending_G: Dict[nn.Module, List[torch.Tensor]] = {}
+
+        # Deferred-mode raw chunk buffers: kept across the whole refresh
+        # window, drained inside get_factors().
+        self._raw_X: Dict[nn.Module, List[torch.Tensor]] = {}
+        self._raw_G: Dict[nn.Module, List[torch.Tensor]] = {}
 
         self._linear_layers: List[nn.Module] = []
 
@@ -169,6 +210,10 @@ class RawActivationHooks(GramMatrixEstimator):
             self._R_G[module] = None
             self._n_rows_X[module] = 0
             self._n_rows_G[module] = 0
+            self._pending_X[module] = []
+            self._pending_G[module] = []
+            self._raw_X[module] = []
+            self._raw_G[module] = []
 
     # ------------------------------------------------------------------
     # GramMatrixEstimator interface
@@ -206,6 +251,12 @@ class RawActivationHooks(GramMatrixEstimator):
             R_G : (n_out, n_out) upper-triangular  (gradient factor)
         """
         logger.debug("get_factors() called: %d tracked layers", len(self._linear_layers))
+
+        # Deferred mode: drain raw chunk buffers via one big leaf QR per
+        # layer, then fall through to the regular damping/normalisation path.
+        if self.deferred:
+            self._drain_deferred()
+
         factors: Dict[nn.Module, Tuple[torch.Tensor, torch.Tensor]] = {}
         for module in self._linear_layers:
             R_X_raw = self._R_X.get(module)
@@ -218,6 +269,8 @@ class RawActivationHooks(GramMatrixEstimator):
             # When p < n, torch.linalg.qr(mode='reduced') returns a non-square
             # R of shape (p, n) instead of (n, n).  Detect this by checking
             # whether the stored R is square — if not, p < n was violated.
+            # In batched mode the chunks are zero-padded to (B, max_p, n) so
+            # R is always (n, n); use the row-count tally instead.
             rows_X = self._n_rows_X[module]
             rows_G = self._n_rows_G[module]
 
@@ -235,6 +288,17 @@ class RawActivationHooks(GramMatrixEstimator):
                     f"Layer {module}: accumulated {rows_G} rows for δ, "
                     f"but need >= n_out={n_out_actual}."
                 )
+            if self.batched:
+                if rows_X < R_X_raw.shape[1]:
+                    raise VeredRankError(
+                        f"Layer {module}: accumulated {rows_X} rows for X, "
+                        f"but need >= n_in={R_X_raw.shape[1]} (batched mode)."
+                    )
+                if rows_G < R_G_raw.shape[1]:
+                    raise VeredRankError(
+                        f"Layer {module}: accumulated {rows_G} rows for δ, "
+                        f"but need >= n_out={R_G_raw.shape[1]} (batched mode)."
+                    )
 
             n_in  = R_X_raw.shape[0]
             n_out = R_G_raw.shape[0]
@@ -266,6 +330,122 @@ class RawActivationHooks(GramMatrixEstimator):
         logger.debug("get_factors() returning %d factor pairs", len(factors))
         return factors
 
+    # ------------------------------------------------------------------
+    # Deferred drain — one big leaf QR per layer at refresh time
+    # ------------------------------------------------------------------
+
+    def _drain_deferred(self):
+        """Drain any chunks still buffered at refresh into the running R.
+
+        In-window merges happen inside the hooks once a layer's buffer hits
+        ``deferred_window`` chunks.  This call handles only the residual
+        buffer (≤ deferred_window - 1 chunks per layer) at get_factors() time.
+        """
+        for module in self._linear_layers:
+            chunks_X = self._raw_X.get(module, [])
+            chunks_G = self._raw_G.get(module, [])
+            if chunks_X:
+                X = chunks_X[0] if len(chunks_X) == 1 else torch.cat(chunks_X, dim=0)
+                self._R_X[module] = streaming_tsqr_update(self._R_X.get(module), X)
+                self._raw_X[module] = []
+            if chunks_G:
+                G = chunks_G[0] if len(chunks_G) == 1 else torch.cat(chunks_G, dim=0)
+                self._R_G[module] = streaming_tsqr_update(self._R_G.get(module), G)
+                self._raw_G[module] = []
+
+    # ------------------------------------------------------------------
+    # Batched flush — drain pending chunks via 2 batched QRs per bucket
+    # ------------------------------------------------------------------
+
+    def flush(self):
+        """Drain pending chunks (batched mode) into the running R factors.
+
+        Groups pending chunks by ``n`` (the trailing dim).  For each bucket:
+          - concatenates each layer's pending chunks along the row axis
+          - pads to the bucket's max row count with zeros (inert in QR)
+          - stacks running R factors into (B, n, n), using zeros for layers
+            that have no prior R
+          - calls ``batched_streaming_tsqr_update`` (2 cuSOLVER launches)
+          - writes results back to ``_R_X`` / ``_R_G``
+
+        No-op when batched mode is off, or when buffers are empty.
+        """
+        if not self.batched:
+            return
+        if any(self._pending_X.values()):
+            self._flush_bucket(self._pending_X, self._R_X)
+        if any(self._pending_G.values()):
+            self._flush_bucket(self._pending_G, self._R_G)
+
+    def _flush_bucket(
+        self,
+        pending: Dict[nn.Module, List[torch.Tensor]],
+        running: Dict[nn.Module, Optional[torch.Tensor]],
+    ):
+        """Bucket pending chunks by trailing dim n and drain each bucket."""
+        # Bucket modules by n_in/n_out (already includes bias augmentation
+        # for X if augment_bias is on).
+        buckets: Dict[int, List[nn.Module]] = {}
+        for module, chunks in pending.items():
+            if not chunks:
+                continue
+            n = chunks[0].shape[1]
+            buckets.setdefault(n, []).append(module)
+
+        for n, modules in buckets.items():
+            self._drain_one_bucket(modules, n, pending, running)
+
+        # Reset pending buffers.
+        for module in pending:
+            pending[module] = []
+
+    def _drain_one_bucket(
+        self,
+        modules: List[nn.Module],
+        n: int,
+        pending: Dict[nn.Module, List[torch.Tensor]],
+        running: Dict[nn.Module, Optional[torch.Tensor]],
+    ):
+        """Run two batched QRs for one (n)-bucket of layers."""
+        B = len(modules)
+        if B == 0:
+            return
+
+        # Concatenate each layer's pending chunks, find bucket max rows.
+        merged_chunks: List[torch.Tensor] = []
+        for m in modules:
+            if len(pending[m]) == 1:
+                merged_chunks.append(pending[m][0])
+            else:
+                merged_chunks.append(torch.cat(pending[m], dim=0))
+
+        # Use first chunk's device/dtype as bucket reference.
+        ref = merged_chunks[0]
+        device, dtype = ref.device, ref.dtype
+        max_p = max(c.shape[0] for c in merged_chunks)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("_drain_one_bucket: n=%d B=%d max_p=%d", n, B, max_p)
+
+        # Pad each chunk to (max_p, n) with zeros, then stack -> (B, max_p, n).
+        padded = torch.zeros(B, max_p, n, device=device, dtype=dtype)
+        for i, c in enumerate(merged_chunks):
+            padded[i, :c.shape[0]] = c
+
+        # Build running_R stack: (B, n, n) with zeros for first-call layers.
+        running_stack = torch.zeros(B, n, n, device=device, dtype=dtype)
+        for i, m in enumerate(modules):
+            R_old = running[m]
+            if R_old is not None:
+                running_stack[i] = R_old
+
+        # Two batched cuSOLVER QR calls do all B layers at once.
+        R_out = batched_streaming_tsqr_update(running_stack, padded)
+
+        # Write merged Rs back to the running dict.
+        for i, m in enumerate(modules):
+            running[m] = R_out[i]
+
     def clear(self):
         """Reset all R-factor accumulators."""
         for module in self._linear_layers:
@@ -273,6 +453,10 @@ class RawActivationHooks(GramMatrixEstimator):
             self._R_G[module] = None
             self._n_rows_X[module] = 0
             self._n_rows_G[module] = 0
+            self._pending_X[module] = []
+            self._pending_G[module] = []
+            self._raw_X[module] = []
+            self._raw_G[module] = []
 
     def remove(self):
         """Detach all hooks and free state."""
@@ -348,6 +532,11 @@ class RawActivationHooks(GramMatrixEstimator):
             ones = torch.ones(x.shape[0], 1, device=x.device, dtype=x.dtype)
             x = torch.cat([x, ones], dim=1)           # (p, n_in + 1)
 
+        # Optional per-step row transform (e.g. WGSO weighting).  Applied
+        # exactly once per chunk regardless of streaming/batched/deferred mode.
+        if self.chunk_transform_X is not None:
+            x = self.chunk_transform_X(x)
+
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "_forward_hook [%s]: raw_shape=%s → chunk=%s  "
@@ -357,6 +546,24 @@ class RawActivationHooks(GramMatrixEstimator):
                 "None" if self._R_X[module] is None
                 else str(tuple(self._R_X[module].shape)),
             )
+
+        if self.deferred:
+            # Buffer chunks; merge in larger batches via streaming_tsqr_update
+            # once the per-layer buffer hits deferred_window entries.
+            self._raw_X[module].append(x)
+            self._n_rows_X[module] += x.shape[0]
+            if len(self._raw_X[module]) >= self.deferred_window:
+                Xc = (self._raw_X[module][0] if len(self._raw_X[module]) == 1
+                       else torch.cat(self._raw_X[module], dim=0))
+                self._R_X[module] = streaming_tsqr_update(self._R_X[module], Xc)
+                self._raw_X[module] = []
+            return
+
+        if self.batched:
+            # Buffer for later flush — no QR launched here.
+            self._pending_X[module].append(x)
+            self._n_rows_X[module] += x.shape[0]
+            return
 
         # Streaming TSQR update
         self._R_X[module] = streaming_tsqr_update(self._R_X[module], x)
@@ -393,6 +600,10 @@ class RawActivationHooks(GramMatrixEstimator):
                 idx = torch.randperm(delta.shape[0], device=delta.device)[:self.max_seq_rows]
                 delta = delta[idx]
 
+        # Optional per-step row transform (e.g. WGSO weighting on gradients).
+        if self.chunk_transform_G is not None:
+            delta = self.chunk_transform_G(delta)
+
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "_backward_hook [%s]: raw_shape=%s → chunk=%s  "
@@ -402,6 +613,21 @@ class RawActivationHooks(GramMatrixEstimator):
                 "None" if self._R_G[module] is None
                 else str(tuple(self._R_G[module].shape)),
             )
+
+        if self.deferred:
+            self._raw_G[module].append(delta)
+            self._n_rows_G[module] += delta.shape[0]
+            if len(self._raw_G[module]) >= self.deferred_window:
+                Gc = (self._raw_G[module][0] if len(self._raw_G[module]) == 1
+                       else torch.cat(self._raw_G[module], dim=0))
+                self._R_G[module] = streaming_tsqr_update(self._R_G[module], Gc)
+                self._raw_G[module] = []
+            return
+
+        if self.batched:
+            self._pending_G[module].append(delta)
+            self._n_rows_G[module] += delta.shape[0]
+            return
 
         self._R_G[module] = streaming_tsqr_update(self._R_G[module], delta)
         self._n_rows_G[module] += delta.shape[0]

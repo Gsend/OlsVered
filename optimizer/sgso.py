@@ -307,6 +307,82 @@ def streaming_tsqr_update(
     return result
 
 
+# ---------------------------------------------------------------------------
+# 3b. Batched streaming TSQR — for use inside batched-flush hooks
+# ---------------------------------------------------------------------------
+
+def _positive_diagonal_R_batched(R: torch.Tensor) -> torch.Tensor:
+    """Batched version of _positive_diagonal_R.
+
+    Parameters
+    ----------
+    R : (B, n, n) batch of upper-triangular matrices.
+
+    Returns
+    -------
+    R_norm : same shape, each (n, n) slice has positive diagonal.
+    """
+    diag = R.diagonal(dim1=-2, dim2=-1)            # (B, n)
+    signs = diag.sign()
+    signs = torch.where(signs == 0, torch.ones_like(signs), signs)
+    return R * signs.unsqueeze(-1)                  # broadcast (B,n,1) over rows
+
+
+def batched_streaming_tsqr_update(
+    running_R: torch.Tensor,
+    new_chunks: torch.Tensor,
+) -> torch.Tensor:
+    """Fold a batch of chunks into running R factors with two batched QRs.
+
+    Equivalent to calling ``streaming_tsqr_update`` separately for each layer
+    in the batch, but uses two cuSOLVER calls total instead of 2 × B.
+
+    Both stages run via ``torch.linalg.qr`` on 3-D input, which dispatches
+    to the batched cuSOLVER kernel.
+
+    Parameters
+    ----------
+    running_R : (B, n, n)
+        Per-layer running upper-triangular factors.  For "first-call" layers
+        with no prior R, pass a zero (n, n) slice — the merge QR then reduces
+        to the leaf QR result (up to positive-diagonal normalisation).
+    new_chunks : (B, p, n)
+        Per-layer new chunks, padded along ``p`` to the bucket maximum with
+        zeros.  Zero rows are inert in QR (contribute nothing to RᵀR).
+
+    Returns
+    -------
+    R_updated : (B, n, n) merged upper-triangular factors with positive diagonal.
+
+    Numerical equivalence
+    ---------------------
+    For a layer i with running_R[i] = R_old, new_chunks[i] = X_new:
+        Stage 1 leaf:    R_leaf_i = qr(X_new).R              (n × n)
+        Stage 2 merge:   R_out_i  = qr(cat([R_old; R_leaf_i])).R   (n × n)
+    Mathematically identical to streaming_tsqr_update(R_old, X_new) up to
+    QR sign ambiguity, which the positive-diagonal step resolves.
+    """
+    B, p, n = new_chunks.shape
+    assert running_R.shape == (B, n, n), \
+        f"running_R shape {tuple(running_R.shape)} != ({B}, {n}, {n})"
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("batched_streaming_tsqr_update: B=%d p=%d n=%d", B, p, n)
+
+    # Stage 1: batched leaf QR  (B, p, n) -> (B, n, n)
+    _, R_leaf = torch.linalg.qr(new_chunks, mode="reduced")
+
+    # Stage 2: batched merge QR  cat[(B,n,n), (B,n,n)] = (B, 2n, n) -> (B, n, n)
+    pair = torch.cat([running_R, R_leaf], dim=1)
+    _, R_merged = torch.linalg.qr(pair, mode="reduced")
+
+    return _positive_diagonal_R_batched(R_merged)
+
+
+# ---------------------------------------------------------------------------
+# 4. finalize_R — Tikhonov damping via ridge augmentation
+# ---------------------------------------------------------------------------
+
 def finalize_R(
     running_R: torch.Tensor,
     damping: float,
@@ -343,6 +419,122 @@ def finalize_R(
                      _TS(result, "R_damped"),
                      result.diag().min().item(), result.diag().max().item())
     return result
+
+
+# ---------------------------------------------------------------------------
+# 3c. batched_streaming_finalize_R — batched ridge augmentation
+# (placeholder — Phase 2 focuses on trsm batching, not QR batching)
+# ---------------------------------------------------------------------------
+
+
+def _apply_vered_batched_impl(
+    grad_W: torch.Tensor,
+    R_X: torch.Tensor,
+    R_G: torch.Tensor,
+) -> torch.Tensor:
+    """Pure implementation — see ``apply_vered_batched`` for docs."""
+
+    # ---- Left: multiply by G⁻¹ = (R_Gᵀ R_G)⁻¹ ----
+    # Step 1: R_Gᵀ T1 = grad_W   (lower triangular system per batch element)
+    R_G_T = R_G.transpose(-2, -1)
+    T1 = torch.linalg.solve_triangular(R_G_T, grad_W, upper=False)
+    # Step 2: R_G T2 = T1
+    T2 = torch.linalg.solve_triangular(R_G,   T1,     upper=True)
+
+    # ---- Right: T2 · A⁻¹  via two solves on T2ᵀ ----
+    # Step 3: R_Xᵀ T3 = T2ᵀ
+    R_X_T = R_X.transpose(-2, -1)
+    T3 = torch.linalg.solve_triangular(R_X_T, T2.transpose(-2, -1), upper=False)
+    # Step 4: R_X  T4 = T3
+    T4 = torch.linalg.solve_triangular(R_X,   T3,                    upper=True)
+
+    return T4.transpose(-2, -1)   # (B, n_out, n_in)
+
+
+# Phase 3-revised v2: CUDA Graphs for the batched apply.  Capture each
+# (B, n_in, n_out, dtype, device) bucket once on first call; replay on every
+# subsequent step.  Replay skips per-op launch overhead by issuing a single
+# graph launch that internally fires all 4 trsm + 2 transpose kernels.
+# Falls back to eager if capture fails (e.g. cuSOLVER not capturable on a
+# given CUDA version, shape edge cases).
+_BATCHED_GRAPH_CACHE: dict = {}
+_USE_CUDA_GRAPHS: bool = True   # global switch; off if capture fails fatally
+
+
+def _get_graphed_batched_apply(grad_W: torch.Tensor,
+                                 R_X: torch.Tensor,
+                                 R_G: torch.Tensor):
+    """Lazily capture or fetch a CUDA Graph for this shape bucket.
+
+    Returns the graphed callable, or None to indicate "use eager".
+    """
+    if not _USE_CUDA_GRAPHS or not grad_W.is_cuda:
+        return None
+    key = (grad_W.shape, R_X.shape, R_G.shape,
+           grad_W.dtype, grad_W.device)
+    if key in _BATCHED_GRAPH_CACHE:
+        return _BATCHED_GRAPH_CACHE[key]   # may be None if prior capture failed
+
+    # Build static sample inputs to drive capture.  Identity factors are
+    # numerically benign (no zero diagonals → trsm stable).
+    B = grad_W.shape[0]
+    n_out, n_in = grad_W.shape[1], grad_W.shape[2]
+    try:
+        sample_grad = torch.empty_like(grad_W).normal_()
+        sample_RX = torch.eye(n_in, dtype=grad_W.dtype, device=grad_W.device
+                               ).unsqueeze(0).expand(B, n_in, n_in).contiguous()
+        sample_RG = torch.eye(n_out, dtype=grad_W.dtype, device=grad_W.device
+                               ).unsqueeze(0).expand(B, n_out, n_out).contiguous()
+        graphed = torch.cuda.make_graphed_callables(
+            _apply_vered_batched_impl,
+            (sample_grad, sample_RX, sample_RG),
+        )
+        _BATCHED_GRAPH_CACHE[key] = graphed
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("CUDA Graph captured for B=%d n=%dx%d", B, n_in, n_out)
+        return graphed
+    except Exception as e:
+        # Cache the failure so we don't retry every step.
+        _BATCHED_GRAPH_CACHE[key] = None
+        logger.warning(
+            "CUDA Graph capture failed for B=%d n=%dx%d (%s); using eager.",
+            B, n_in, n_out, e,
+        )
+        return None
+
+
+def apply_vered_batched(
+    grad_W: torch.Tensor,
+    R_X: torch.Tensor,
+    R_G: torch.Tensor,
+) -> torch.Tensor:
+    """Batched apply_vered: 4 cuSOLVER trsm launches total for B layers.
+
+    Equivalent to running apply_vered separately for each (grad_W[i], R_X[i],
+    R_G[i]) but uses batched triangular solves to amortise launch overhead.
+
+    On SmallGPT with 24 Linear K-FAC layers, the per-layer apply_vered does
+    4 × 24 = 96 trsm calls per step.  Bucketed by shape (mostly the d_model
+    bucket) we drop this to ~12 batched calls — 8x fewer launches.
+
+    Parameters
+    ----------
+    grad_W : (B, n_out, n_in)
+    R_X    : (B, n_in,  n_in)  upper-triangular
+    R_G    : (B, n_out, n_out) upper-triangular
+
+    Returns
+    -------
+    nat_grad : (B, n_out, n_in)
+    """
+    B = grad_W.shape[0]
+    assert R_X.shape[0] == B and R_G.shape[0] == B, \
+        f"batch dims mismatch: grad_W={grad_W.shape[0]}, R_X={R_X.shape[0]}, R_G={R_G.shape[0]}"
+
+    graphed = _get_graphed_batched_apply(grad_W, R_X, R_G)
+    if graphed is None:
+        return _apply_vered_batched_impl(grad_W, R_X, R_G)
+    return graphed(grad_W, R_X, R_G)
 
 
 # ---------------------------------------------------------------------------

@@ -488,7 +488,9 @@ def main(argv=None):
     ap.add_argument("--n-samples", type=int, default=N_SAMPLES)
     ap.add_argument("--device", default=None)
     ap.add_argument("--data-root", default=str(REPO_ROOT / "data"))
+    ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args(argv)
+    globals()["SEED"] = args.seed
 
     device = torch.device(
         args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")

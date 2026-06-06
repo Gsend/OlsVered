@@ -70,7 +70,7 @@ import torch
 import torch.nn as nn
 
 from optimizer.raw_activation_hooks import RawActivationHooks, VeredRankError
-from optimizer.sgso import apply_vered, apply_vered_bias
+from optimizer.sgso import apply_vered, apply_vered_bias, apply_vered_batched
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +130,12 @@ class VeredKFAC(torch.optim.Optimizer):
         augment_bias: bool = False,
         max_conv_rows: int = 512,
         max_seq_rows: Optional[int] = None,
+        batched_qr: bool = False,
+        deferred_qr: bool = False,
     ):
         logger.debug(
-            "VeredKFAC init: factor_update_freq=%d  damping=%.2e  augment_bias=%s",
-            factor_update_freq, damping, augment_bias,
+            "VeredKFAC init: factor_update_freq=%d  damping=%.2e  augment_bias=%s  batched_qr=%s  deferred_qr=%s",
+            factor_update_freq, damping, augment_bias, batched_qr, deferred_qr,
         )
 
         # Collect all linear-layer parameters for the base optimizer
@@ -160,6 +162,8 @@ class VeredKFAC(torch.optim.Optimizer):
             augment_bias=augment_bias,
             max_conv_rows=max_conv_rows,
             max_seq_rows=max_seq_rows,
+            batched=batched_qr,
+            deferred=deferred_qr,
         )
         self.hooks.enable()
 
@@ -273,6 +277,118 @@ class VeredKFAC(torch.optim.Optimizer):
     # ------------------------------------------------------------------
     # Preconditioner apply
     # ------------------------------------------------------------------
+
+    def _get_module_hp(self, module):
+        """Return (lr, wd, mom) for the param-group containing module.weight."""
+        for group in self.param_groups:
+            if any(p is module.weight for p in group["params"]):
+                return group["lr"], group["weight_decay"], group["momentum"]
+        return None, None, None
+
+    def _apply_preconditioner_bucketed(self):
+        """Phase 2: bucket layers by (n_in, n_out) shape, batched apply per bucket.
+
+        Layers that need the per-layer slow path (Conv2d with multi-dim weight,
+        augment_bias-trimmed R_X, modules without cached factors, classic
+        fallback) are processed by the original per-layer routine.  This keeps
+        Phase 2 semantically identical to baseline while harvesting the trsm
+        batching win on the common case (transformer Linear with consistent
+        shapes).
+        """
+        # First pass: classify each module.  Per-layer fallback handles the
+        # tricky cases; the fast path handles plain 2-D Linear.
+        fast = {}   # (n_in, n_out, dtype, device) → list of (module, lr, wd, mom)
+        slow_modules = []
+
+        for module in self.hooks.linear_layers:
+            if module.weight.grad is None:
+                continue
+            lr, wd, mom = self._get_module_hp(module)
+            if lr is None:
+                continue
+
+            if module not in self._factors:
+                # Plain SGD fallback for unprecondtioned layers.
+                slow_modules.append((module, lr, wd, mom))
+                continue
+
+            R_X, R_G = self._factors[module]
+
+            # Fast path requirements: 2-D Linear weight, no bias augmentation
+            # trim needed.  Conv2d and augment_bias take the slow path.
+            weight = module.weight
+            is_linear_2d = (isinstance(module, nn.Linear) and weight.dim() == 2)
+            needs_trim = self.augment_bias and module.bias is not None
+            if not is_linear_2d or needs_trim:
+                slow_modules.append((module, lr, wd, mom))
+                continue
+
+            key = (R_X.shape[0], R_G.shape[0], weight.dtype, weight.device)
+            fast.setdefault(key, []).append((module, lr, wd, mom))
+
+        # ---- Slow path: per-layer apply for fallback + irregular modules ----
+        for module, lr, wd, mom in slow_modules:
+            self._apply_preconditioner(module, lr=lr, weight_decay=wd, momentum=mom)
+
+        # ---- Fast path: batched apply per shape bucket ----
+        for (n_in, n_out, _, _), entries in fast.items():
+            B = len(entries)
+            modules = [e[0] for e in entries]
+
+            # Stack grad_W and apply weight-decay per layer first (per-layer
+            # weight_decay scalar varies across param_groups in principle).
+            grad_list = []
+            for m, lr, wd, mom in entries:
+                gw = m.weight.grad
+                if wd > 0:
+                    gw = gw.add(m.weight.data, alpha=wd)
+                grad_list.append(gw)
+            grad_stack = torch.stack(grad_list, dim=0)              # (B, n_out, n_in)
+
+            R_X_stack = torch.stack([self._factors[m][0] for m in modules], dim=0)
+            R_G_stack = torch.stack([self._factors[m][1] for m in modules], dim=0)
+
+            try:
+                nat_grad_stack = apply_vered_batched(
+                    grad_stack, R_X_stack, R_G_stack
+                )
+            except Exception as e:
+                logger.warning(
+                    "VeredKFAC: apply_vered_batched failed for bucket "
+                    "(n_in=%d, n_out=%d, B=%d): %s — falling back to per-layer.",
+                    n_in, n_out, B, e,
+                )
+                for m, lr, wd, mom in entries:
+                    self._apply_preconditioner(m, lr=lr, weight_decay=wd, momentum=mom)
+                continue
+
+            # Per-layer post-processing: grad clip, momentum, weight update,
+            # bias.  No way to fully batch this since lr/mom can differ.
+            for i, (m, lr, wd, mom) in enumerate(entries):
+                nat_grad_w = nat_grad_stack[i]
+
+                if self.grad_clip is not None:
+                    gnorm = nat_grad_w.norm()
+                    if gnorm > self.grad_clip:
+                        nat_grad_w = nat_grad_w * (self.grad_clip / gnorm)
+
+                if mom > 0:
+                    if m not in self._momentum_buffers:
+                        self._momentum_buffers[m] = torch.zeros_like(nat_grad_w)
+                    buf = self._momentum_buffers[m]
+                    buf.mul_(mom).add_(nat_grad_w)
+                    nat_grad_w = buf
+
+                m.weight.data.add_(nat_grad_w, alpha=-lr)
+
+                # Bias gradient — same handling as per-layer path.
+                if m.bias is not None and m.bias.grad is not None:
+                    R_G = self._factors[m][1]
+                    grad_b = m.bias.grad
+                    if wd > 0:
+                        grad_b = grad_b.add(m.bias.data, alpha=wd)
+                    nat_grad_b = apply_vered_bias(grad_b, R_G)
+                    m.bias.data.add_(nat_grad_b, alpha=-lr)
 
     def _apply_preconditioner(
         self,
@@ -388,6 +504,10 @@ class VeredKFAC(torch.optim.Optimizer):
 
         self._step_count += 1
 
+        # Drain batched-mode buffers (no-op if not batched).  This converts
+        # the per-step ~144 cuSOLVER launches into ~6-12 batched launches.
+        self.hooks.flush()
+
         # Refresh R factors on schedule
         if self._step_count % self.factor_update_freq == 1 or self.factor_update_freq == 1:
             self._update_factors()
@@ -395,21 +515,11 @@ class VeredKFAC(torch.optim.Optimizer):
         logger.debug("VeredKFAC.step() step=%d  factors_cached=%d",
                      self._step_count, len(self._factors))
 
-        # Apply preconditioner and update weights
+        # Apply preconditioner and update weights.  Phase 2: layers are
+        # bucketed by (n_in, n_out) shape and apply_vered_batched runs once
+        # per bucket (4 batched trsm calls instead of 4 per layer).
         t_precond = time.perf_counter()
-        for module in self.hooks.linear_layers:
-            # Find this module's param group for lr / wd / momentum
-            lr = mom = wd = None
-            for group in self.param_groups:
-                if any(p is module.weight for p in group["params"]):
-                    lr  = group["lr"]
-                    wd  = group["weight_decay"]
-                    mom = group["momentum"]
-                    break
-            if lr is None:
-                continue   # module not in param_groups (shouldn't happen)
-
-            self._apply_preconditioner(module, lr=lr, weight_decay=wd, momentum=mom)
+        self._apply_preconditioner_bucketed()
 
         self.timing["precondition"].append(time.perf_counter() - t_precond)
         self.timing["total_step"].append(time.perf_counter() - t_total)

@@ -298,6 +298,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
                     damping: float, momentum: float,
                     grad_clip: Optional[float] = None,
                     gamma: Optional[float] = None,
+                    factor_update_freq: int = 20,
                     ) -> Tuple[torch.optim.Optimizer,
                                torch.optim.Optimizer,
                                List[int]]:
@@ -357,7 +358,8 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         # 4x-more-frequent refresh just makes OlsSM look slower than Classic.
         kfac_opt = OlsSMKFAC(
             model, lr=kfac_lr, damping=damping,
-            factor_update_freq=20, decomp_update_freq=20,
+            factor_update_freq=factor_update_freq,
+            decomp_update_freq=factor_update_freq,
             adaptive=True, adaptive_min_n=4096,
             momentum=momentum, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_gram_dim=KFAC_MAX_DIM,
@@ -366,7 +368,8 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         from optimizer.classic_kfac import ClassicKFAC
         kfac_opt = ClassicKFAC(
             model, lr=kfac_lr, damping=damping,
-            factor_update_freq=20, decomp_update_freq=20,
+            factor_update_freq=factor_update_freq,
+            decomp_update_freq=factor_update_freq,
             momentum=momentum, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_gram_dim=KFAC_MAX_DIM,
         )
@@ -374,7 +377,7 @@ def make_optimizers(variant: str, model: nn.Module, kfac_lr: float,
         from optimizer.vered_kfac import VeredKFAC
         kfac_opt = VeredKFAC(
             model, lr=kfac_lr, damping=damping,
-            factor_update_freq=20,
+            factor_update_freq=factor_update_freq,
             momentum=momentum, grad_clip=GRAD_CLIP, gamma=GAMMA,
             max_out_dim=KFAC_MAX_DIM,
         )
@@ -509,6 +512,8 @@ def run_probe(
     grad_clip: Optional[float] = None,    # override the optimizer's clip
     gamma: Optional[float] = None,        # override the optimizer's EMA gamma
     lr_schedule: str = "cosine_max_steps",  # see scheduler block below
+    factor_update_freq: int = 20,         # K-FAC factor refresh cadence
+    warmup_steps: Optional[int] = None,   # override the hardcoded 200; None = 200
 ) -> Dict:
     """Run a single (variant, lr, damping, momentum) probe; return metrics + status.
 
@@ -524,7 +529,8 @@ def run_probe(
     model = SmallGPT(vocab_size=vocab_size).to(device)
     kfac_opt, emb_opt, _ = make_optimizers(variant, model, kfac_lr, damping,
                                             momentum, grad_clip=grad_clip,
-                                            gamma=gamma)
+                                            gamma=gamma,
+                                            factor_update_freq=factor_update_freq)
 
     if print_progress:
         # Dump every parameter that could affect the trajectory.  Added as
@@ -560,6 +566,9 @@ def run_probe(
               f"(log_every={condition_log_every})")
         print(f"    eval_every_samples:   {eval_every_samples}")
         print(f"    lr_schedule:          {lr_schedule!r}")
+        print(f"    factor_update_freq:   {factor_update_freq}")
+        print(f"    warmup_steps (arg):   {warmup_steps!r}   "
+              f"(None -> 200)")
         print(f"    data: batch_size={bs}  seq_len={seq_len}")
         print(f"    model: {type(model).__name__}  params={n_params:,}")
         print(f"    ----- optimizer state ({type(kfac_opt).__name__}) -----")
@@ -577,7 +586,7 @@ def run_probe(
                     val = f"{pg[attr]}  (from param_groups[0])"
             print(f"      {attr:22s} {val}")
         print(f"    ----- scheduler shape ({lr_schedule}) -----")
-        _warmup = 200
+        _warmup = warmup_steps if warmup_steps is not None else 200
         if lr_schedule == "cosine_max_steps":
             _cosine = max(1, max_steps - _warmup)
             print(f"      kfac:  warmup={_warmup}  cosine_T_max={_cosine}  "
@@ -608,7 +617,7 @@ def run_probe(
     #     trains at LR=X after warmup, independent of max_steps.  Emb LR is
     #     also held constant at EMB_LR (AdamW is robust enough at this LR
     #     that warmup is not required).
-    warmup = 200
+    warmup = warmup_steps if warmup_steps is not None else 200
     if lr_schedule == "cosine_max_steps":
         cosine_steps = max(1, max_steps - warmup)
         scheduler = torch.optim.lr_scheduler.SequentialLR(kfac_opt, schedulers=[

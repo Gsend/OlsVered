@@ -131,9 +131,10 @@ class LoRALinear(nn.Module):
         self.W0 = nn.Parameter(torch.zeros(out_features, in_features), requires_grad=False)
         self.bias0 = (nn.Parameter(torch.zeros(out_features), requires_grad=False)
                       if bias else None)
-        # LoRA factors (zero-init → no-op until set_lora is called)
-        self.A = nn.Parameter(torch.zeros(r, in_features))
+        # Standard LoRA init: A ~ N(0, 0.02), B = 0  →  W_eff = W0 at init, gradients non-zero
+        self.A = nn.Parameter(torch.empty(r, in_features))
         self.B = nn.Parameter(torch.zeros(out_features, r))
+        nn.init.normal_(self.A, std=0.02)
 
     @classmethod
     def from_linear(cls, linear: nn.Linear, r: int, alpha: float) -> "LoRALinear":
