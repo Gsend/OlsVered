@@ -1,0 +1,32 @@
+{
+  "comparison": {
+    "rows": [
+      {
+        "method": "teacher",
+        "acc": 0.9243119266055045,
+        "params": 109483778,
+        "passes": 0,
+        "kind": "ref"
+      },
+      {
+        "method": "closed-form LoRA (this run)",
+        "acc": 0.56,
+        "params": 68143874,
+        "passes": 7,
+        "kind": "ours"
+      }
+    ],
+    "teacher_acc": 0.9243119266055045
+  },
+  "wall_s": 171.7528965473175,
+  "lora_roles_fit": 36,
+  "layer_map": {
+    "0": 0,
+    "1": 7,
+    "2": 8,
+    "3": 9,
+    "4": 10,
+    "5": 11
+  },
+  "baselines_source": "C:\\Users\\Admin\\OlsVered\\benchmark\\results\\distill_distilbert_base_uncased_sst2.json"
+}

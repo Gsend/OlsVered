@@ -335,14 +335,13 @@ class VeredKFAC(torch.optim.Optimizer):
             B = len(entries)
             modules = [e[0] for e in entries]
 
-            # Stack grad_W and apply weight-decay per layer first (per-layer
-            # weight_decay scalar varies across param_groups in principle).
-            grad_list = []
-            for m, lr, wd, mom in entries:
-                gw = m.weight.grad
-                if wd > 0:
-                    gw = gw.add(m.weight.data, alpha=wd)
-                grad_list.append(gw)
+            # Stack grad_W — do NOT apply weight_decay here.  Decoupled
+            # weight decay (AdamW style) is applied AFTER the natural-gradient
+            # operation, by scaling the weights separately.  Adding wd*W to the
+            # gradient before preconditioning lets the natural-gradient operator
+            # amplify the wd*W term in low-curvature directions, which diverges
+            # (observed in the wd sweep: ppl jumped from 668 to 5345 at wd=0.1).
+            grad_list = [m.weight.grad for m, lr, wd, mom in entries]
             grad_stack = torch.stack(grad_list, dim=0)              # (B, n_out, n_in)
 
             R_X_stack = torch.stack([self._factors[m][0] for m in modules], dim=0)
@@ -362,8 +361,9 @@ class VeredKFAC(torch.optim.Optimizer):
                     self._apply_preconditioner(m, lr=lr, weight_decay=wd, momentum=mom)
                 continue
 
-            # Per-layer post-processing: grad clip, momentum, weight update,
-            # bias.  No way to fully batch this since lr/mom can differ.
+            # Per-layer post-processing: grad clip, momentum, decoupled weight
+            # decay, weight update, bias.  No way to fully batch this since
+            # lr/mom/wd can differ across param groups.
             for i, (m, lr, wd, mom) in enumerate(entries):
                 nat_grad_w = nat_grad_stack[i]
 
@@ -379,15 +379,20 @@ class VeredKFAC(torch.optim.Optimizer):
                     buf.mul_(mom).add_(nat_grad_w)
                     nat_grad_w = buf
 
+                # Decoupled weight decay (AdamW style): scale weights, then
+                # add preconditioned gradient.
+                if wd > 0:
+                    m.weight.data.mul_(1.0 - lr * wd)
                 m.weight.data.add_(nat_grad_w, alpha=-lr)
 
-                # Bias gradient — same handling as per-layer path.
+                # Bias gradient — bias has no Kronecker preconditioner on its
+                # input side (treat A=I for bias).  Apply natgrad through R_G
+                # only, then decoupled wd.
                 if m.bias is not None and m.bias.grad is not None:
                     R_G = self._factors[m][1]
-                    grad_b = m.bias.grad
+                    nat_grad_b = apply_vered_bias(m.bias.grad, R_G)
                     if wd > 0:
-                        grad_b = grad_b.add(m.bias.data, alpha=wd)
-                    nat_grad_b = apply_vered_bias(grad_b, R_G)
+                        m.bias.data.mul_(1.0 - lr * wd)
                     m.bias.data.add_(nat_grad_b, alpha=-lr)
 
     def _apply_preconditioner(
@@ -409,19 +414,20 @@ class VeredKFAC(torch.optim.Optimizer):
 
         # ---- Select R factors ----
         if module not in self._factors:
-            # No preconditioner yet — plain SGD step
-            grad_w = weight.grad
+            # No preconditioner yet — plain SGD step with decoupled wd
             if weight_decay > 0:
-                grad_w = grad_w.add(weight.data, alpha=weight_decay)
-            weight.data.add_(grad_w, alpha=-lr)
+                weight.data.mul_(1.0 - lr * weight_decay)
+            weight.data.add_(weight.grad, alpha=-lr)
             return
 
         R_X, R_G = self._factors[module]
 
         # ---- Weight gradient ----
+        # Decoupled weight decay (AdamW style): scale weights AFTER computing
+        # the natural-gradient step.  Adding wd*W to the gradient before
+        # preconditioning would let the natural-gradient operator amplify the
+        # wd*W term in low-curvature directions, which diverges.
         grad_w = weight.grad
-        if weight_decay > 0:
-            grad_w = grad_w.add(weight.data, alpha=weight_decay)
 
         # Bias augmentation: if augment_bias is on, R_X has shape (n_in+1, n_in+1).
         # grad_w has shape (n_out, n_in) — we need to drop the last column of R_X
@@ -471,16 +477,18 @@ class VeredKFAC(torch.optim.Optimizer):
             buf.mul_(momentum).add_(nat_grad_w)
             nat_grad_w = buf
 
+        # Decoupled weight decay (AdamW style)
+        if weight_decay > 0:
+            weight.data.mul_(1.0 - lr * weight_decay)
         weight.data.add_(nat_grad_w, alpha=-lr)
 
         # ---- Bias gradient ----
         # Matches ClassicKFAC: apply only the G factor (treat A=1 for bias).
         # nat_grad_b = G⁻¹ · grad_b = (R_Gᵀ R_G)⁻¹ · grad_b
         if module.bias is not None and module.bias.grad is not None:
-            grad_b = module.bias.grad
+            nat_grad_b = apply_vered_bias(module.bias.grad, R_G)
             if weight_decay > 0:
-                grad_b = grad_b.add(module.bias.data, alpha=weight_decay)
-            nat_grad_b = apply_vered_bias(grad_b, R_G)
+                module.bias.data.mul_(1.0 - lr * weight_decay)
             module.bias.data.add_(nat_grad_b, alpha=-lr)
 
     # ------------------------------------------------------------------
@@ -544,6 +552,34 @@ class VeredKFAC(torch.optim.Optimizer):
                     "count":    len(times),
                 }
         return stats
+
+    # ------------------------------------------------------------------
+    # Factor-capture-mode forwarding (see GramMatrixEstimator.capture).
+    # Lets callers write `with optimizer.capture():` for multi-pass autograd
+    # training loops (PINNs, MAML, WGAN-GP, contrastive learning, influence
+    # functions) where exactly one forward+backward should populate the
+    # Kronecker factors.
+    # ------------------------------------------------------------------
+    def capture(self):
+        """Context manager that enables factor capture for one pass.
+
+        Use this when the training step contains multiple forward passes
+        through the network or any ``autograd.grad`` calls that traverse
+        the K-FAC-instrumented layers (PINN derivative computation, MAML
+        inner loop, WGAN gradient penalty, etc.).  Wrap exactly one
+        forward+backward (or forward + ``autograd.grad`` for the dominant
+        loss term) in ``with kfac.capture():`` to populate the per-layer
+        Kronecker factors from that designated pass.
+        """
+        return self.hooks.capture()
+
+    def pause_capture(self):
+        """Suppress factor capture without detaching hooks."""
+        self.hooks.pause()
+
+    def resume_capture(self):
+        """Re-enable factor capture."""
+        self.hooks.resume()
 
     def cleanup(self):
         """Remove hooks and free all cached state."""

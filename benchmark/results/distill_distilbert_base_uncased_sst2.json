@@ -1,0 +1,29 @@
+{
+  "teacher": "textattack/bert-base-uncased-SST-2",
+  "student": "distilbert-base-uncased",
+  "task": "sst2",
+  "teacher_acc": 0.9243119266055045,
+  "teacher_params": 109483778,
+  "student_params": 66955010,
+  "student_param_frac": 0.6115518775758725,
+  "ols_n_layers": 1,
+  "seeds": 1,
+  "results": {
+    "ols_distill_deep": {
+      "acc_mean": 0.7224770642201835,
+      "acc_std": 0.0,
+      "wall_s_mean": 1466.2883570194244,
+      "n_data_passes": 7,
+      "seeds": [
+        {
+          "acc": 0.7224770642201835,
+          "loss": 0.9350711785325216,
+          "wall_s": 1466.2883570194244,
+          "peak_mem_gb": 1.506930176,
+          "n_data_passes": 7,
+          "n_pairs": 36
+        }
+      ]
+    }
+  }
+}

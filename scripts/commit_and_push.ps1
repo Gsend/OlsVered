@@ -29,16 +29,58 @@ Write-Host ""
 Write-Host "[2/4] Staging files..." -ForegroundColor Yellow
 
 $filesToAdd = @(
-    "benchmark\gpu_benchmark.py",
-    "benchmark\training_benchmark.py",
-    "benchmark\economic_analysis.py",
-    "benchmark\theoretical_analysis.py",
-    "benchmark\results",
+    # Core code
     "optimizer\hooks.py",
-    "optimizer\olsvered_kfac.py",
+    "optimizer\gram_estimator.py",
+    "optimizer\raw_activation_hooks.py",
+    "optimizer\sgso.py",
     "optimizer\classic_kfac.py",
-    "run_benchmark.sh",
+    "optimizer\vered_kfac.py",
+    "optimizer\bf16_linalg.py",                  # NEW: hand-rolled bf16 linalg
+    "optimizer\olssm_kfac.py",
+    "optimizer\layer_retrainer.py",
+    "optimizer\backend.py",
+    "optimizer\__init__.py",
+    "optimizer\errors.py",
+
+    # Benchmarks
+    "benchmark",                                  # whole directory, .py + RESULTS.md
+    "benchmark\results",                          # JSON outputs + PNG figures
+
+    # Tests
+    "tests\test_kappa_scaling.py",                # polished kappa-sweep
+    "tests\test_bf16_linalg_support.py",          # NEW: PyTorch bf16 probe
+    "tests\test_vered_kfac.py",
+    "tests\test_hooks.py",
+
+    # Paper
+    "paper.md",                                   # main paper draft
+    "InvFreeKFAC_paper.docx",                     # rendered docx
+
+    # PS1 launchers
+    "run_autoencoder_mnist.ps1",
+    "run_autoencoder_mnist_screen.ps1",
+    "run_autoencoder_mnist_screen2.ps1",
+    "run_autoencoder_mnist_screen3.ps1",
+    "run_autoencoder_mnist_adamw_screen.ps1",
+    "run_autoencoder_mnist_adamw_screen2.ps1",
+    "run_autoencoder_mnist_adamw_bf16_screen.ps1",
+    "run_pinn_burgers.ps1",
+    "run_pinn_burgers_tune_and_bench.ps1",
+    "run_pinn_verify_capture.ps1",
+    "run_kappa_sweep_polish.ps1",
+    "run_bf16_linalg_probe.ps1",
+    "run_bf16_linalg_test.ps1",
+    "run_plot_ae_walltime_loss.ps1",
+    "run_plot_best_walltime_ppl.ps1",
+    "run_adamw_tuning_sweep.ps1",
+    "run_kfac_wd_tuning_sweep.ps1",
+
+    # Scripts + meta
     "scripts",
+    "requirements.txt",
+    "requirements-cpu.txt",
+    "pyproject.toml",
     ".gitignore"
 )
 

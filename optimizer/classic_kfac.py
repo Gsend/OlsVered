@@ -164,7 +164,6 @@ class ClassicKFAC(torch.optim.Optimizer):
                 for p in module.parameters():
                     if p.grad is None:
                         continue
-                    grad = p.grad
                     lr = wd = mom = None
                     for group in self.param_groups:
                         if any(p is pp for pp in group["params"]):
@@ -174,9 +173,12 @@ class ClassicKFAC(torch.optim.Optimizer):
                             break
                     if lr is None:
                         continue   # param not in any group — skip
+                    # Decoupled weight decay (AdamW style): apply BEFORE the
+                    # gradient step, NOT through the gradient.  Avoids amplifying
+                    # the wd*W term by the (non-existent here) preconditioner.
                     if wd > 0:
-                        grad = p.grad.add(p.data, alpha=wd)
-                    p.data.add_(grad, alpha=-lr)
+                        p.data.mul_(1.0 - lr * wd)
+                    p.data.add_(p.grad, alpha=-lr)
                 continue
 
             A_inv, G_inv = self._inverses[module]
@@ -194,10 +196,12 @@ class ClassicKFAC(torch.optim.Optimizer):
 
             # --- Weight update ---
             if module.weight.grad is not None:
-                if wd > 0:
-                    grad_w = module.weight.grad.add(module.weight.data, alpha=wd)
-                else:
-                    grad_w = module.weight.grad
+                # Decoupled weight decay: do NOT add wd*W to the gradient
+                # before preconditioning — that would let the natural-gradient
+                # operator amplify the wd*W term in low-curvature directions,
+                # causing divergence (observed in the wd sweep).  Instead, scale
+                # the weights AFTER computing the preconditioned gradient.
+                grad_w = module.weight.grad
 
                 # Conv2d weights are 4D (C_out, C_in, kH, kW).
                 # The Kronecker factors are 2D (the hooks use im2col to flatten
@@ -223,15 +227,17 @@ class ClassicKFAC(torch.optim.Optimizer):
                     buf.mul_(mom).add_(nat_grad)
                     nat_grad = buf
 
+                # Apply weight decay decoupled, then preconditioned gradient
+                if wd > 0:
+                    module.weight.data.mul_(1.0 - lr * wd)
                 module.weight.data.add_(nat_grad, alpha=-lr)
 
             # --- Bias update ---
             if module.bias is not None and module.bias.grad is not None:
-                if wd > 0:
-                    grad_b = module.bias.grad.add(module.bias.data, alpha=wd)
-                else:
-                    grad_b = module.bias.grad
+                grad_b = module.bias.grad
                 nat_grad_b = G_inv @ grad_b
+                if wd > 0:
+                    module.bias.data.mul_(1.0 - lr * wd)
                 module.bias.data.add_(nat_grad_b, alpha=-lr)
 
         self.timing["precondition"].append(time.perf_counter() - t_precond)
@@ -253,6 +259,34 @@ class ClassicKFAC(torch.optim.Optimizer):
                     "count": len(times),
                 }
         return stats
+
+    # ------------------------------------------------------------------
+    # Factor-capture-mode forwarding (see GramMatrixEstimator.capture).
+    # Lets callers write `with optimizer.capture():` for multi-pass autograd
+    # training loops (PINNs, MAML, WGAN-GP, contrastive learning, influence
+    # functions) where exactly one forward+backward should populate the
+    # Kronecker factors.
+    # ------------------------------------------------------------------
+    def capture(self):
+        """Context manager that enables factor capture for one pass.
+
+        Use this when the training step contains multiple forward passes
+        through the network or any ``autograd.grad`` calls that traverse
+        the K-FAC-instrumented layers (PINN derivative computation, MAML
+        inner loop, WGAN gradient penalty, etc.).  Wrap exactly one
+        forward+backward (or forward + ``autograd.grad`` for the dominant
+        loss term) in ``with kfac.capture():`` to populate the per-layer
+        Kronecker factors from that designated pass.
+        """
+        return self.hooks.capture()
+
+    def pause_capture(self):
+        """Suppress factor capture without detaching hooks."""
+        self.hooks.pause()
+
+    def resume_capture(self):
+        """Re-enable factor capture."""
+        self.hooks.resume()
 
     def cleanup(self):
         """Remove hooks and free cached state."""
