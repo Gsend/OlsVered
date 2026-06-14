@@ -587,6 +587,25 @@ def apply_vered(
         logger.debug("apply_vered() called: %s  %s  %s",
                      _TS(grad_W, "grad_W"), _TS(R_X, "R_X"), _TS(R_G, "R_G"))
 
+    # ---- True-bf16 dispatch ----
+    # cuSOLVER does not implement triangular_solve for bf16; if the R factors
+    # are bf16 we route through the hand-rolled primitives in optimizer.bf16_linalg.
+    # The gradient is cast to bf16 for the solves, then the natural gradient
+    # is cast back to grad_W's dtype before return (so master weights stay at
+    # their original precision — standard mixed-precision pattern).
+    if R_X.dtype == torch.bfloat16 or R_G.dtype == torch.bfloat16:
+        from optimizer.bf16_linalg import solve_triangular_bf16
+        grad_dtype = grad_W.dtype
+        g16 = grad_W.to(torch.bfloat16)
+        R_X16 = R_X.to(torch.bfloat16) if R_X.dtype != torch.bfloat16 else R_X
+        R_G16 = R_G.to(torch.bfloat16) if R_G.dtype != torch.bfloat16 else R_G
+        T1 = solve_triangular_bf16(R_G16.t().contiguous(), g16, upper=False)
+        T2 = solve_triangular_bf16(R_G16, T1, upper=True)
+        T3_T = solve_triangular_bf16(R_X16.t().contiguous(), T2.t().contiguous(),
+                                        upper=False)
+        T4_T = solve_triangular_bf16(R_X16, T3_T, upper=True)
+        return T4_T.t().contiguous().to(grad_dtype)
+
     # ---- Left: multiply by G⁻¹ = (R_Gᵀ R_G)⁻¹ ----
     # Step 1: solve R_Gᵀ T1 = grad_W   (lower triangular)
     T1 = torch.linalg.solve_triangular(R_G.T, grad_W, upper=False)   # (n_out, n_in)

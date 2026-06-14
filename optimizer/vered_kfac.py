@@ -132,11 +132,18 @@ class VeredKFAC(torch.optim.Optimizer):
         max_seq_rows: Optional[int] = None,
         batched_qr: bool = False,
         deferred_qr: bool = False,
+        use_true_bf16: bool = False,
     ):
         logger.debug(
-            "VeredKFAC init: factor_update_freq=%d  damping=%.2e  augment_bias=%s  batched_qr=%s  deferred_qr=%s",
-            factor_update_freq, damping, augment_bias, batched_qr, deferred_qr,
+            "VeredKFAC init: factor_update_freq=%d  damping=%.2e  augment_bias=%s  batched_qr=%s  deferred_qr=%s  true_bf16=%s",
+            factor_update_freq, damping, augment_bias, batched_qr, deferred_qr, use_true_bf16,
         )
+        # When True, store R_X and R_G as bfloat16 and use the hand-rolled
+        # primitives in optimizer.bf16_linalg for QR and triangular solves
+        # (since cuSOLVER lacks bf16 geqrf / triangular_solve / cholesky).
+        # The natural gradient is cast back to fp32 before the weight update
+        # so master weights stay at fp32 (standard mixed-precision pattern).
+        self.use_true_bf16 = use_true_bf16
 
         # Collect all linear-layer parameters for the base optimizer
         params = []
