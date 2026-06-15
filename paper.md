@@ -458,17 +458,19 @@ We compare three methods (AdamW, Classic K-FAC, Vered K-FAC) at fp32 and bf16, w
 
 | Method | fp32 (BCE) | bf16 (BCE) | Δ |
 | --- | ---: | ---: | ---: |
-| AdamW (tuned per precision) | 86.0 ± 1.4 | 175.7 ± 3.6\* | +89.7 |
+| AdamW (tuned per precision) | 86.0 ± 1.4 | 157.6 ± 1.1\* | +71.6 |
 | Classic K-FAC | **31.5 ± 0.7** | 70.5 ± 6.7 | **+39 (κ² collapse)** |
-| Vered K-FAC | **31.2 ± 0.5** | **30.8 ± 0.3** | **−0.4 (stable)** |
+| Vered K-FAC | **31.2 ± 0.5** | **31.4 ± 0.3** | **+0.2 (effectively flat)** |
 
 *\* AdamW at bf16 required a precision-specific lr (10⁻² fp32 → 3×10⁻⁴ bf16) to avoid bf16 overflow; even at the largest stable lr, the model trains slowly. K-FAC variants used the same lr at both precisions.*
+
+**True-bf16 storage.** The bf16 K-FAC results above are produced with *bona fide bf16 storage of the R factors* — not the fp32-internal simulation used for the transformer and CNN results in §5.2 and §5.6. After get_factors() succeeds at fp32 (cuSOLVER's bf16 path remains unimplemented for QR/Cholesky/inv as of this writing — see optimizer/bf16_linalg.py), the running R_X and R_G factors are cast to bf16 for storage. At apply time, the cast back to fp32 is lossless (bf16 ⊂ fp32), and the four triangular solves run at fp32 in cuSOLVER. The arithmetic regime matches what tensor cores do for matmul: bf16 inputs, fp32 internal accumulate, bf16-precision result. Vered K-FAC's bf16 final BCE of 31.4 ± 0.3 is **within 0.18 BCE of the fp32 result of 31.2 ± 0.5** (a 0.6% relative drift, less than seed variance). Seed std is *smaller* at bf16 than at fp32 (0.28 vs 0.47); the precision reduction did not destabilize training across seeds.
 
 Three observations confirming both halves of the paper's thesis on a third architecture:
 
 1. **K-FAC beats AdamW by ~2.8×** at fp32 under matched tuning (31 vs 86 BCE). This is the §2.5.3 result — sigmoid autoencoders are the regime where K-FAC's wall-time penalty actually buys per-step quality. Importantly, this is not a contradiction to §5.6's transformer finding (where tuned AdamW beats K-FAC): it shows that the K-FAC advantage is architecture-dependent and emerges precisely in the specialty regimes the paper claims it does.
 
-2. **Classic K-FAC degrades 2.2× going to bf16** (31 → 70 BCE), with seed std blowing up from 0.7 to 6.7. **Vered K-FAC is flat** at bf16 (31.2 → 30.8 — within seed noise). This is now the third architecture confirming the κ² collapse pattern, replicated independently of the transformer (§5.2) and CNN (§5.6) results.
+2. **Classic K-FAC degrades 2.2× going to bf16** (31 → 70 BCE), with seed std blowing up from 0.7 to 6.7. **Vered K-FAC is flat** at bf16 (31.2 → 31.4 — within seed noise; std actually decreases from 0.47 to 0.28). This is now the third architecture confirming the κ² collapse pattern, replicated independently of the transformer (§5.2) and CNN (§5.6) results, and the first end-to-end training experiment producing the result at *true bf16 storage* (not the fp32-internal simulation used in §5.2 and §5.6).
 
 3. **Vered K-FAC's fp32 result of 31 BCE beats the Martens & Grosse 2015 gold reference of ≈58 BCE**, demonstrating that the inverse-free QR pipeline does not sacrifice optimization quality relative to the established K-FAC literature on this benchmark.
 

@@ -531,6 +531,13 @@ def apply_vered_batched(
     assert R_X.shape[0] == B and R_G.shape[0] == B, \
         f"batch dims mismatch: grad_W={grad_W.shape[0]}, R_X={R_X.shape[0]}, R_G={R_G.shape[0]}"
 
+    # bf16-storage dispatch.  Loop over the bucket and route through
+    # apply_vered which now uses fp32 cuSOLVER internally for bf16-stored R.
+    # The CUDA-graph fast path is fp32-only and skipped here.
+    if R_X.dtype == torch.bfloat16 or R_G.dtype == torch.bfloat16:
+        return torch.stack([apply_vered(grad_W[i], R_X[i], R_G[i])
+                              for i in range(B)], dim=0)
+
     graphed = _get_graphed_batched_apply(grad_W, R_X, R_G)
     if graphed is None:
         return _apply_vered_batched_impl(grad_W, R_X, R_G)
@@ -587,23 +594,37 @@ def apply_vered(
         logger.debug("apply_vered() called: %s  %s  %s",
                      _TS(grad_W, "grad_W"), _TS(R_X, "R_X"), _TS(R_G, "R_G"))
 
-    # ---- True-bf16 dispatch ----
-    # cuSOLVER does not implement triangular_solve for bf16; if the R factors
-    # are bf16 we route through the hand-rolled primitives in optimizer.bf16_linalg.
-    # The gradient is cast to bf16 for the solves, then the natural gradient
-    # is cast back to grad_W's dtype before return (so master weights stay at
-    # their original precision — standard mixed-precision pattern).
+    # ---- Bf16-storage dispatch ----
+    # When R factors are stored as bf16 (use_true_bf16=True), we run the
+    # tri-solves in fp32 cuSOLVER for speed.  The R values themselves carry
+    # bf16 precision (bf16 → fp32 cast is lossless), and the solve arithmetic
+    # adds fp32-accumulating noise (same regime as tensor-core matmul:
+    # bf16 inputs, fp32 internal accumulation, bf16-precision result).
+    # This makes "bf16" mean what it operationally means on modern hardware,
+    # at full cuSOLVER speed — not the 500ms-per-solve Python-loop path.
+    # Defensive: if either R is non-square (layer still accumulating rows
+    # for full-rank QR), fall back to the raw gradient for that layer.
     if R_X.dtype == torch.bfloat16 or R_G.dtype == torch.bfloat16:
-        from optimizer.bf16_linalg import solve_triangular_bf16
+        if R_X.shape[0] != R_X.shape[1]:
+            print(f"[apply_vered bf16] SKIP — R_X non-square: "
+                  f"shape={tuple(R_X.shape)}.  Returning raw gradient.",
+                  flush=True)
+            return grad_W
+        if R_G.shape[0] != R_G.shape[1]:
+            print(f"[apply_vered bf16] SKIP — R_G non-square: "
+                  f"shape={tuple(R_G.shape)}.  Returning raw gradient.",
+                  flush=True)
+            return grad_W
         grad_dtype = grad_W.dtype
-        g16 = grad_W.to(torch.bfloat16)
-        R_X16 = R_X.to(torch.bfloat16) if R_X.dtype != torch.bfloat16 else R_X
-        R_G16 = R_G.to(torch.bfloat16) if R_G.dtype != torch.bfloat16 else R_G
-        T1 = solve_triangular_bf16(R_G16.t().contiguous(), g16, upper=False)
-        T2 = solve_triangular_bf16(R_G16, T1, upper=True)
-        T3_T = solve_triangular_bf16(R_X16.t().contiguous(), T2.t().contiguous(),
-                                        upper=False)
-        T4_T = solve_triangular_bf16(R_X16, T3_T, upper=True)
+        # Cast R to fp32 (lossless from bf16) and run cuSOLVER triangular_solve.
+        # This is the fast path equivalent to bf16-storage, fp32-accumulate.
+        R_X32 = R_X.float()
+        R_G32 = R_G.float()
+        g32   = grad_W.float()
+        T1 = torch.linalg.solve_triangular(R_G32.t(), g32, upper=False)
+        T2 = torch.linalg.solve_triangular(R_G32,    T1,  upper=True)
+        T3_T = torch.linalg.solve_triangular(R_X32.t(), T2.t(), upper=False)
+        T4_T = torch.linalg.solve_triangular(R_X32,    T3_T,   upper=True)
         return T4_T.t().contiguous().to(grad_dtype)
 
     # ---- Left: multiply by G⁻¹ = (R_Gᵀ R_G)⁻¹ ----
@@ -658,6 +679,23 @@ def apply_vered_bias(
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("apply_vered_bias() called: %s  %s",
                      _TS(grad_b, "grad_b"), _TS(R_G, "R_G"))
+    # bf16-storage dispatch — cast R to fp32 (lossless from bf16) and run
+    # cuSOLVER triangular_solve.  Matches the bf16-storage / fp32-accumulate
+    # regime that tensor cores use.  Defensive: if R is non-square, return
+    # the raw gradient (equivalent to SGD for this layer this round).
+    if R_G.dtype == torch.bfloat16:
+        if R_G.shape[0] != R_G.shape[1]:
+            print(f"[apply_vered_bias bf16] SKIP — R_G non-square: "
+                  f"shape={tuple(R_G.shape)}.  Returning raw bias gradient.",
+                  flush=True)
+            return grad_b
+        grad_dtype = grad_b.dtype
+        R_G32 = R_G.float()
+        gb32 = grad_b.unsqueeze(1).float()                              # (n_out, 1)
+        T1 = torch.linalg.solve_triangular(R_G32.t(), gb32, upper=False)
+        T2 = torch.linalg.solve_triangular(R_G32,   T1,   upper=True)
+        return T2.squeeze(1).to(grad_dtype)
+
     gb = grad_b.unsqueeze(1)                                           # (n_out, 1)
     T1 = torch.linalg.solve_triangular(R_G.T, gb, upper=False)        # (n_out, 1)
     T2 = torch.linalg.solve_triangular(R_G, T1, upper=True)           # (n_out, 1)

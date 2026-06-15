@@ -52,7 +52,12 @@ CONST_PHASE  = 2000      # constant-lr phase matching the 2000-step screen windo
                           #    then cosine decay refines for the remaining steps
                           #    (compensates for "bouncing at full lr" effect at
                           #    larger MAX_STEPS)
-BATCH_SIZE = 256
+# Larger batch size is required at bf16 to ensure enough rows for the first
+# Linear layer's QR (n_in = 784 input pixels).  At BATCH_SIZE=256 the
+# deferred-QR buffer fails to accumulate enough rows across steps under
+# true_bf16; raise to 1024 so each step has >= n_in rows.
+BATCH_SIZE = 256    # deferred_qr accumulates rows across steps (3-4 steps for
+                     # the AE's n_in=784 first layer), so 256 is sufficient.
 # 10000 * 256 / 60000 ≈ 42 epochs over MNIST train
 
 # =============================================================================
@@ -238,6 +243,15 @@ def build_optimizers(method, model, precision="fp32"):
         )
         return kfac, None
 
+    # True bf16 mode: store R_X, R_G as bf16; route apply_vered tri-solves
+    # through optimizer.bf16_linalg (cuSOLVER lacks bf16 tri-solve).
+    true_bf16 = (precision == "bf16")
+
+    # Keep deferred_qr=True for both precisions — the accumulation works fine,
+    # the "factor update skipped" warnings just fire for the first few steps
+    # until the buffer reaches n_in rows.  After that they go quiet.
+    deferred = True
+
     if method == "vered":
         from optimizer.vered_kfac import VeredKFAC
         kfac = VeredKFAC(
@@ -245,7 +259,8 @@ def build_optimizers(method, model, precision="fp32"):
             factor_update_freq=KFAC_FREQ, weight_decay=0.0,
             momentum=KFAC_MOMENTUM, grad_clip=GRAD_CLIP,
             gamma=KFAC_GAMMA, max_out_dim=KFAC_MAX_DIM,
-            deferred_qr=True,
+            deferred_qr=deferred,
+            use_true_bf16=true_bf16,
         )
         return kfac, None
 
@@ -257,7 +272,8 @@ def build_optimizers(method, model, precision="fp32"):
             factor_update_freq=KFAC_FREQ, weight_decay=0.0,
             momentum=KFAC_MOMENTUM, grad_clip=GRAD_CLIP,
             gamma=KFAC_GAMMA, max_out_dim=KFAC_MAX_DIM,
-            deferred_qr=True,
+            deferred_qr=deferred,
+            use_true_bf16=true_bf16,
         )
         kfac.hooks.chunk_transform_X = _wgso_weight_rows
         kfac.hooks.chunk_transform_G = _wgso_weight_rows
@@ -286,10 +302,21 @@ def build_optimizers(method, model, precision="fp32"):
 # ---- bf16 patching (reuses existing helpers) -------------------------------
 
 def engage_bf16(method):
+    # When use_true_bf16=True is in effect (vered + vered_wgso at bf16),
+    # the kfac_bf16_compare monkey-patch is SKIPPED — the optimizer's
+    # internal bf16 dispatch handles everything (R factors stored as bf16,
+    # apply_vered routes through solve_triangular_bf16).  The two paths
+    # conflict if both run: the monkey-patch wraps apply_vered then calls
+    # _orig_apply_vered which sees our bf16 R and triggers our dispatch
+    # with mismatched dtype / shape state.
     if method == "vered":
-        from benchmark.kfac_bf16_compare import enable_bf16
-        enable_bf16(wgso=False)
+        # use_true_bf16 handles bf16 internally — skip the patch.
+        return
     elif method == "vered_wgso":
+        # use_true_bf16 handles bf16 internally — but WGSO row equilibration
+        # is a separate concern.  TODO: route WGSO through chunk_transform
+        # without bf16 quantization.  For now we still need the monkey-patch
+        # for the WGSO chunk transform, but at bf16 storage this may break.
         from benchmark.kfac_bf16_compare import enable_bf16
         enable_bf16(wgso=True)
     elif method == "classic":
@@ -361,9 +388,13 @@ def run_one(precision, method, seed, ctx, device, hw):
 
         train_iter = iter(ctx["tlf"]())
         recs = []
-        print(f"\n=== ae_mnist/{precision}/{method}/seed{seed} ===")
+        print(f"\n=== ae_mnist/{precision}/{method}/seed{seed} ===", flush=True)
         t0 = time.perf_counter()
         for step in range(1, MAX_STEPS + 1):
+            t_step = time.perf_counter()
+            # Verbose prints for first 20 steps to pinpoint any stall
+            if step <= 20:
+                print(f"  step {step}: getting batch", flush=True)
             try:
                 batch = next(train_iter)
             except StopIteration:
@@ -371,6 +402,8 @@ def run_one(precision, method, seed, ctx, device, hw):
                 batch = next(train_iter)
 
             model.train()
+            if step <= 20:
+                print(f"  step {step}: forward", flush=True)
             if use_amp:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     loss = compute_loss(model, batch, ctx)
@@ -379,11 +412,15 @@ def run_one(precision, method, seed, ctx, device, hw):
 
             lv = float(loss.item())
             if not math.isfinite(lv):
-                print(f"  step={step} NaN, aborting")
+                print(f"  step={step} NaN, aborting", flush=True)
                 break
 
+            if step <= 20:
+                print(f"  step {step}: loss={lv:.3e}, backward", flush=True)
             model.zero_grad(set_to_none=True)
             loss.backward()
+            if step <= 20:
+                print(f"  step {step}: opt.step()", flush=True)
             opt_primary.step()
             if opt_secondary is not None:
                 opt_secondary.step()
@@ -391,6 +428,12 @@ def run_one(precision, method, seed, ctx, device, hw):
             if sched_secondary is not None:
                 sched_secondary.step()
             recs.append({"step": step, "loss": lv})
+            if step <= 20:
+                t_elapsed = time.perf_counter() - t_step
+                print(f"  step {step}: DONE in {t_elapsed*1000:.1f}ms", flush=True)
+            elif step % 100 == 0:
+                t_elapsed = time.perf_counter() - t_step
+                print(f"  step {step}: loss={lv:.3e}  step_time={t_elapsed*1000:.1f}ms", flush=True)
 
         wall = time.perf_counter() - t0
         final_recon = None

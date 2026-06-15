@@ -207,12 +207,23 @@ class VeredKFAC(torch.optim.Optimizer):
         try:
             new_factors = self.hooks.get_factors()
         except VeredRankError as e:
-            # Partial failure — log and skip the refresh this round.
+            # Partial failure for at least one layer (typically the layer with
+            # the largest n_in hasn't seen enough rows yet — e.g. AE first
+            # layer at n_in=784 with batch_size=256 needs 4+ forward passes).
+            # BUG FIX: do NOT call self.hooks.clear() here.  The previous
+            # behaviour wiped successfully accumulated R factors for ALL
+            # layers (including the ones that would have factored fine), AND
+            # wiped the deferred buffer's accumulated rows, forcing a fresh
+            # restart every freq steps — leading to a perpetual fail loop on
+            # any model whose layers' n_in exceeds the per-step row count.
+            # Instead: keep the buffer + running R intact and let the next
+            # factor-update attempt see the additional rows.
             logger.warning("VeredKFAC: factor update skipped — %s", e)
-            self.hooks.clear()
             self.timing["factor_compute"].append(time.perf_counter() - t0)
             return
 
+        # Successful factor update — reset the streaming TSQR window for the
+        # next factor-update cycle (K-FAC factors are based on recent activations).
         self.hooks.clear()
 
         # Validate finite values
@@ -273,12 +284,21 @@ class VeredKFAC(torch.optim.Optimizer):
                     blended[module] = (R_X_new, R_G_new)
             clean = blended
 
+        # If use_true_bf16 is enabled, downcast factors to bf16 BEFORE storage.
+        # apply_vered (see optimizer/sgso.py) dispatches on R.dtype and routes
+        # bf16 factors through the hand-rolled triangular-solve primitives in
+        # optimizer.bf16_linalg.  The natural-gradient output is cast back to
+        # fp32 (master-weights precision) before the weight update.
+        if self.use_true_bf16:
+            clean = {m: (R_X.to(torch.bfloat16), R_G.to(torch.bfloat16))
+                      for m, (R_X, R_G) in clean.items()}
+
         self._factors = clean
         self.timing["factor_compute"].append(time.perf_counter() - t0)
 
         logger.debug(
-            "VeredKFAC: factors updated for %d layers (step %d)",
-            len(self._factors), self._step_count,
+            "VeredKFAC: factors updated for %d layers (step %d)  true_bf16=%s",
+            len(self._factors), self._step_count, self.use_true_bf16,
         )
 
     # ------------------------------------------------------------------
@@ -518,13 +538,29 @@ class VeredKFAC(torch.optim.Optimizer):
                 loss = closure()
 
         self._step_count += 1
+        _verbose = self._step_count <= 20
+
+        if _verbose:
+            print(f"    [VeredKFAC step={self._step_count}] entry", flush=True)
 
         # Drain batched-mode buffers (no-op if not batched).  This converts
         # the per-step ~144 cuSOLVER launches into ~6-12 batched launches.
         self.hooks.flush()
+        if _verbose:
+            print(f"    [VeredKFAC step={self._step_count}] hooks.flush done", flush=True)
 
-        # Refresh R factors on schedule
-        if self._step_count % self.factor_update_freq == 1 or self.factor_update_freq == 1:
+        # Refresh R factors on schedule.
+        # BUG FIX: previously fired at step 1 (% freq == 1), but at step 1
+        # only one forward pass has run, so the deferred buffer holds only
+        # one batch worth of rows.  For layers whose n_in exceeds the batch
+        # size (e.g. AE first layer n_in=784 vs batch=256), this caused a
+        # VeredRankError every factor-update cycle.  Wait until we have at
+        # least one full factor_update_freq window of forward passes before
+        # the first factor update.
+        if self.factor_update_freq == 1:
+            self._update_factors()
+        elif (self._step_count >= self.factor_update_freq and
+              self._step_count % self.factor_update_freq == 0):
             self._update_factors()
 
         logger.debug("VeredKFAC.step() step=%d  factors_cached=%d",

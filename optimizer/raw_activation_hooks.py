@@ -274,20 +274,30 @@ class RawActivationHooks(GramMatrixEstimator):
             rows_X = self._n_rows_X[module]
             rows_G = self._n_rows_G[module]
 
+            # BUG FIX (was: raise VeredRankError).
+            # If R is non-square, this layer hasn't yet accumulated enough
+            # rows for XᵀX to be full-rank.  Previously we raised, which the
+            # caller handled by hooks.clear() — wiping ALL layers' progress,
+            # not just this one.  That caused the perpetual-fail loop on
+            # models with wide first layers (e.g. AE n_in=784, batch=256).
+            # New behaviour: skip this layer for this round.  Its R_X stays
+            # partial-rank and will accumulate more rows on subsequent
+            # forward passes.  Other layers that DID accumulate enough still
+            # get their factors returned.
             if R_X_raw.shape[0] != R_X_raw.shape[1]:
-                n_in_actual = R_X_raw.shape[1]
-                raise VeredRankError(
-                    f"Layer {module}: accumulated {rows_X} rows for X, "
-                    f"but need >= n_in={n_in_actual}.  "
-                    "Increase batch_size × seq_len or set factor_update_freq "
-                    "higher to accumulate more rows before factorisation."
+                logger.debug(
+                    "get_factors() [%s]: skipped — X factor partial-rank "
+                    "(%d rows accumulated, need >= n_in=%d)",
+                    _module_tag(module), rows_X, R_X_raw.shape[1],
                 )
+                continue
             if R_G_raw.shape[0] != R_G_raw.shape[1]:
-                n_out_actual = R_G_raw.shape[1]
-                raise VeredRankError(
-                    f"Layer {module}: accumulated {rows_G} rows for δ, "
-                    f"but need >= n_out={n_out_actual}."
+                logger.debug(
+                    "get_factors() [%s]: skipped — G factor partial-rank "
+                    "(%d rows accumulated, need >= n_out=%d)",
+                    _module_tag(module), rows_G, R_G_raw.shape[1],
                 )
+                continue
             if self.batched:
                 if rows_X < R_X_raw.shape[1]:
                     raise VeredRankError(

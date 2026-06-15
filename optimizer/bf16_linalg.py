@@ -194,10 +194,31 @@ def solve_triangular_bf16(R: torch.Tensor, B: torch.Tensor,
     Implementation: column-by-column substitution.  Each step is a bf16
     matmul against the already-solved rows + a bf16 diagonal divide.
     The diagonal divide uses fp32 intermediate (see _safe_div)."""
-    assert R.dtype == torch.bfloat16 and B.dtype == torch.bfloat16
+    # Defensive dtype + shape diagnostics — the apply_vered chain can pass
+    # in tensors that have been transposed / contiguous'd / monkey-patched
+    # through several layers; mismatches surface as opaque slice-assign errors.
+    if R.dtype != torch.bfloat16 or B.dtype != torch.bfloat16:
+        print(f"[bf16_linalg.solve_triangular_bf16] DTYPE MISMATCH: "
+              f"R.dtype={R.dtype}, B.dtype={B.dtype}, "
+              f"R.shape={tuple(R.shape)}, B.shape={tuple(B.shape)}", flush=True)
+        raise TypeError(
+            f"solve_triangular_bf16: both R and B must be bf16; "
+            f"got R.dtype={R.dtype}, B.dtype={B.dtype}"
+        )
+    if R.shape[1] != R.shape[0]:
+        print(f"[bf16_linalg.solve_triangular_bf16] NON-SQUARE R: "
+              f"R.shape={tuple(R.shape)}", flush=True)
+        raise ValueError(f"R must be square, got {R.shape}")
+    if B.shape[0] != R.shape[0]:
+        print(f"[bf16_linalg.solve_triangular_bf16] SHAPE MISMATCH: "
+              f"R.shape={tuple(R.shape)}, B.shape={tuple(B.shape)}", flush=True)
+        raise ValueError(f"B rows must match R, got R={R.shape}, B={B.shape}")
     n = R.shape[0]
-    assert R.shape[1] == n, f"R must be square, got {R.shape}"
-    assert B.shape[0] == n, f"B rows must match R, got {B.shape}"
+    # Ensure contiguity — bf16 strided tensors can fail .matmul silently
+    if not R.is_contiguous():
+        R = R.contiguous()
+    if not B.is_contiguous():
+        B = B.contiguous()
     X = torch.empty_like(B)
     if upper:
         # Back substitution: solve from i = n-1 down to 0

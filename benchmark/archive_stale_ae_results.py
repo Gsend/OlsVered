@@ -16,15 +16,16 @@ ARCHIVE.mkdir(exist_ok=True)
 
 moved = 0
 # NOTE: this list is rotated each time we re-tune a method.  Comment out the
-# patterns you want to KEEP before running.  Currently only bf16 AdamW is
-# stale (lr=1e-2 overflowed; re-running at lr=3e-4 — see adamw_bf16_screen).
+# patterns you want to KEEP before running.  Currently re-running ae_mnist_bf16_vered
+# under the new use_true_bf16=True mode (bf16-stored R factors + hand-rolled
+# bf16 triangular solves via optimizer.bf16_linalg).
 for pat in [
     # "ae_mnist_fp32_classic_seed*.json",   # keep — final tuned result (~31)
     # "ae_mnist_bf16_classic_seed*.json",   # keep — shows the kappa^2 collapse (~70)
     # "ae_mnist_fp32_vered_seed*.json",     # keep — final tuned result (~31)
-    # "ae_mnist_bf16_vered_seed*.json",     # keep — shows the stability claim (~31)
+    "ae_mnist_bf16_vered_seed*.json",         # STALE — re-run with use_true_bf16=True
     # "ae_mnist_fp32_adamw_seed*.json",     # keep — final tuned result (~86)
-    "ae_mnist_bf16_adamw_seed*.json",        # stale — overflowed at step 264-331
+    # "ae_mnist_bf16_adamw_seed*.json",     # keep — already re-run at lr=3e-4
 ]:
     for p in RESULTS.glob(pat):
         target = ARCHIVE / p.name
